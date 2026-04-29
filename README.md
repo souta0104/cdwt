@@ -9,6 +9,7 @@ Interactive `git worktree` switcher for `zsh`.
 - `git`
 - `zsh`
 - `fzf` recommended
+- `gh` optional for GitHub PR worktree creation
 
 If `fzf` is unavailable, `cdwt` falls back to a numbered prompt.
 
@@ -47,15 +48,30 @@ cdwt
 
 This opens a selector with:
 
-- `root worktree`
-- every existing linked worktree
-- every local branch that does not already have a worktree, marked as `create`
+- `root`
+- `worktree`
+- `github pr` when `gh` is available
+- `local branch`
 
 Selecting a branch without a worktree asks for confirmation, then runs `git worktree add` into:
 
 ```text
 <repo-parent>/<repo-name>-<branch-name>
 ```
+
+Selecting a GitHub PR asks for confirmation, creates a detached worktree, and runs:
+
+```sh
+gh pr checkout <pr-number>
+```
+
+inside that worktree.
+
+In the item selector:
+
+- `esc` returns to the section selector
+- `tab` moves to the next section
+- `shift-tab` moves to the previous section
 
 You can jump directly to the main worktree with:
 
