@@ -68,18 +68,21 @@ current_branch=""
 current_head=""
 
 has_branch_worktree() {
-  local branch existing
+  local branch existing i count
   branch=$1
-  for existing in "${BRANCH_NAMES_WITH_WORKTREE[@]}"; do
+  count=${#BRANCH_NAMES_WITH_WORKTREE[@]}
+  for ((i = 0; i < count; i++)); do
+    existing=${BRANCH_NAMES_WITH_WORKTREE[$i]}
     [[ "$existing" == "$branch" ]] && return 0
   done
   return 1
 }
 
 branch_worktree_path() {
-  local branch i worktree_branch
+  local branch i count worktree_branch
   branch=$1
-  for i in "${!WORKTREE_PATHS[@]}"; do
+  count=${#WORKTREE_PATHS[@]}
+  for ((i = 0; i < count; i++)); do
     worktree_branch=${WORKTREE_BRANCHES[$i]-}
     if [[ "$worktree_branch" == "$branch" ]]; then
       printf '%s\n' "${WORKTREE_PATHS[$i]}"
@@ -90,9 +93,11 @@ branch_worktree_path() {
 }
 
 has_pr_branch() {
-  local branch existing
+  local branch existing i count
   branch=$1
-  for existing in "${PR_BRANCH_NAMES[@]}"; do
+  count=${#PR_BRANCH_NAMES[@]}
+  for ((i = 0; i < count; i++)); do
+    existing=${PR_BRANCH_NAMES[$i]}
     [[ "$existing" == "$branch" ]] && return 0
   done
   return 1
@@ -104,6 +109,15 @@ join_fields() {
   second=${2-}
   third=${3-}
   printf '%-44s%s%s%s%s' "$first" "$FIELD_SEP" "$second" "$FIELD_SEP" "$third"
+}
+
+make_search_line() {
+  local section line name short_path full_path visible_section
+  section=$1
+  line=$2
+  IFS="$FIELD_SEP" read -r name short_path full_path <<< "$line"
+  visible_section=$(printf '%-12s' "[$section]")
+  printf '%s%s%s%s%s\n' "$visible_section  $name  $short_path" "$FIELD_SEP" "$line" "$FIELD_SEP" "$full_path"
 }
 
 display_path() {
@@ -243,7 +257,7 @@ if [[ "$main_worktree" == "$current_path" ]]; then
 fi
 add_display_line "worktree" "$(join_fields "${repo_name}${root_marker}" "." "$main_worktree")" "$main_worktree" "" "root"
 
-for i in "${!WORKTREE_PATHS[@]}"; do
+for ((i = 0; i < ${#WORKTREE_PATHS[@]}; i++)); do
   if [[ "${WORKTREE_PATHS[$i]}" == "$main_worktree" ]]; then
     continue
   fi
@@ -284,7 +298,7 @@ if [[ ${#DISPLAY_LINES[@]} -eq 0 ]]; then
 fi
 
 choose_line() {
-  local selected line i choice line_number section result key
+  local selected line i choice line_number section result key query search_query selected_line
   local root_count=0
   local worktree_count=0
   local pr_count=0
@@ -296,8 +310,9 @@ choose_line() {
   local -a section_labels=()
   local -a section_keys=()
   local -a scoped_lines=()
+  local -a search_lines=()
 
-  for i in "${!DISPLAY_LINES[@]}"; do
+  for ((i = 0; i < ${#DISPLAY_LINES[@]}; i++)); do
     case "${DISPLAY_SECTIONS[$i]}" in
       root) root_count=$((root_count + 1)) ;;
       worktree) worktree_count=$((worktree_count + 1)) ;;
@@ -325,12 +340,70 @@ choose_line() {
 
   if command -v fzf >/dev/null 2>&1; then
     while true; do
+      if [[ -n "$search_query" ]]; then
+        search_lines=()
+        for ((i = 0; i < ${#DISPLAY_LINES[@]}; i++)); do
+          search_lines+=("$(make_search_line "${DISPLAY_SECTIONS[$i]}" "${DISPLAY_LINES[$i]}")")
+        done
+
+        result=$(
+          printf '%s\n' "${search_lines[@]}" | \
+            fzf \
+              --query="$search_query" \
+              --print-query \
+              --prompt='search> ' \
+              --delimiter="$FIELD_SEP" \
+              --with-nth=1 \
+              --nth=1 \
+              --expect=esc \
+              --height='70%' \
+              --reverse \
+              --border \
+              --layout=reverse \
+              --info=inline-right \
+              --border-label=' search ' \
+              --preview-label=' location ' \
+              --preview-label-pos=2 \
+              --header='all sections' \
+              --footer='esc: sections' \
+              --preview 'if [ -n "{3}" ]; then printf "location: %s\n" {3}; fi' \
+              --preview-window='down:4:wrap'
+        )
+        [[ -z "$result" ]] && return 0
+        query=${result%%$'\n'*}
+        selected_line=${result#*$'\n'}
+        if [[ -z "$query" ]]; then
+          search_query=""
+          section=""
+          continue
+        fi
+        key=$selected_line
+        if [[ "$selected_line" == *$'\n'* ]]; then
+          key=${selected_line%%$'\n'*}
+          selected=${selected_line#*$'\n'}
+        else
+          selected=""
+        fi
+        if [[ "$key" == "esc" ]]; then
+          search_query=""
+          section=""
+          continue
+        fi
+        [[ -z "$selected" ]] && return 0
+        selected=${selected#*$FIELD_SEP}
+        printf '%s\n' "${selected%%$FIELD_SEP*}"
+        return 0
+      fi
+
       if [[ -z "$section" ]]; then
         if (( ${#section_labels[@]} > 1 )); then
-          selected=$(
+          result=$(
             printf '%s\n' "${section_labels[@]}" | \
               fzf \
                 --prompt='section> ' \
+                --print-query \
+                --expect=esc \
+                --bind='change:accept' \
                 --height='~20%' \
                 --reverse \
                 --border \
@@ -339,8 +412,24 @@ choose_line() {
                 --border-label=' sections ' \
                 --header='root / worktree / github pr / local branch'
           )
-          [[ -z "$selected" ]] && return 0
-          for i in "${!section_labels[@]}"; do
+          [[ -z "$result" ]] && return 0
+          query=${result%%$'\n'*}
+          selected_line=${result#*$'\n'}
+          if [[ "$selected_line" == *$'\n'* ]]; then
+            key=${selected_line%%$'\n'*}
+            selected=${selected_line#*$'\n'}
+          else
+            key=$selected_line
+            selected=""
+          fi
+          if [[ "$key" == "esc" ]]; then
+            return 0
+          fi
+          if [[ -n "$query" ]]; then
+            search_query=$query
+            continue
+          fi
+          for ((i = 0; i < ${#section_labels[@]}; i++)); do
             if [[ "${section_labels[$i]}" == "$selected" ]]; then
               section_index=$i
               section=${section_keys[$i]}
@@ -354,7 +443,7 @@ choose_line() {
       fi
 
       scoped_lines=()
-      for i in "${!DISPLAY_LINES[@]}"; do
+      for ((i = 0; i < ${#DISPLAY_LINES[@]}; i++)); do
         if [[ "${DISPLAY_SECTIONS[$i]}" == "$section" ]]; then
           scoped_lines+=("${DISPLAY_LINES[$i]}")
         fi
@@ -441,7 +530,7 @@ choose_line() {
   while true; do
     echo "Sections:" >&2
     line_number=1
-    for i in "${!section_labels[@]}"; do
+    for ((i = 0; i < ${#section_labels[@]}; i++)); do
       printf '%2d) %s\n' "$line_number" "${section_labels[$i]}" >&2
       line_number=$((line_number + 1))
     done
@@ -459,7 +548,7 @@ choose_line() {
     echo >&2
     echo "$section" >&2
     line_number=1
-    for i in "${!DISPLAY_LINES[@]}"; do
+    for ((i = 0; i < ${#DISPLAY_LINES[@]}; i++)); do
       if [[ "${DISPLAY_SECTIONS[$i]}" == "$section" ]]; then
         line=${DISPLAY_LINES[$i]}
         IFS="$FIELD_SEP" read -r name short_path full_path <<< "$line"
@@ -474,7 +563,7 @@ choose_line() {
       continue
     fi
     line_number=1
-    for i in "${!DISPLAY_LINES[@]}"; do
+    for ((i = 0; i < ${#DISPLAY_LINES[@]}; i++)); do
       if [[ "${DISPLAY_SECTIONS[$i]}" == "$section" ]]; then
         if (( line_number == choice )); then
           printf '%s\n' "${DISPLAY_LINES[$i]}"
@@ -536,7 +625,7 @@ selected_line=$(choose_line)
 [[ -z "$selected_line" ]] && exit 130
 
 selected_index=-1
-for i in "${!DISPLAY_LINES[@]}"; do
+for ((i = 0; i < ${#DISPLAY_LINES[@]}; i++)); do
   if [[ "${DISPLAY_LINES[$i]}" == "$selected_line" ]]; then
     selected_index=$i
     break

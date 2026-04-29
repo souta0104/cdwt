@@ -75,6 +75,8 @@ In the item selector:
 - `tab` moves to the next section
 - `shift-tab` moves to the previous section
 
+In the section selector, typing opens a cross-section search view showing matches from all sections.
+
 You can jump directly to the main worktree with:
 
 ```sh
