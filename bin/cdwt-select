@@ -1,0 +1,558 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+FIELD_SEP=$'\x1f'
+
+usage() {
+  cat <<'EOF'
+Usage: cdwt-select [--main]
+
+Select a git worktree or branch and print the destination path.
+EOF
+}
+
+main_only=0
+if [[ $# -gt 1 ]]; then
+  usage >&2
+  exit 1
+fi
+
+if [[ $# -eq 1 ]]; then
+  case "$1" in
+    --main)
+      main_only=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if ! git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+  echo "cdwt: not inside a git worktree" >&2
+  exit 1
+fi
+
+cwd=$(pwd -P)
+git_common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+if [[ "$git_common_dir" != /* ]]; then
+  git_common_dir=$(cd "$cwd/$git_common_dir" && pwd -P)
+fi
+
+expected_main_worktree=$(dirname "$git_common_dir")
+main_worktree=""
+main_parent=""
+repo_name=""
+current_path=$git_root
+
+declare -a WORKTREE_PATHS=()
+declare -a WORKTREE_LABELS=()
+declare -a BRANCH_NAMES_WITH_WORKTREE=()
+declare -a PR_BRANCH_NAMES=()
+declare -a DISPLAY_LINES=()
+declare -a DISPLAY_DESTINATIONS=()
+declare -a DISPLAY_BRANCHES=()
+declare -a DISPLAY_KINDS=()
+declare -a DISPLAY_SECTIONS=()
+declare -a DISPLAY_PR_NUMBERS=()
+
+current_wt_path=""
+current_branch=""
+current_head=""
+
+has_branch_worktree() {
+  local branch existing
+  branch=$1
+  for existing in "${BRANCH_NAMES_WITH_WORKTREE[@]}"; do
+    [[ "$existing" == "$branch" ]] && return 0
+  done
+  return 1
+}
+
+has_pr_branch() {
+  local branch existing
+  branch=$1
+  for existing in "${PR_BRANCH_NAMES[@]}"; do
+    [[ "$existing" == "$branch" ]] && return 0
+  done
+  return 1
+}
+
+join_fields() {
+  local first second third
+  first=${1-}
+  second=${2-}
+  third=${3-}
+  printf '%-44s%s%s%s%s' "$first" "$FIELD_SEP" "$second" "$FIELD_SEP" "$third"
+}
+
+display_path() {
+  local path
+  path=$1
+  if [[ "$path" == "$main_worktree" ]]; then
+    printf '.'
+    return
+  fi
+  if [[ -n "$main_worktree" && "$path" == "$main_worktree/"* ]]; then
+    printf './%s' "${path#"$main_worktree"/}"
+    return
+  fi
+  if [[ -n "$main_parent" && "$path" == "$main_parent/"* ]]; then
+    printf '../%s' "${path#"$main_parent"/}"
+    return
+  fi
+  if [[ "$path" == "$HOME"/* ]]; then
+    printf '~/%s' "${path#"$HOME"/}"
+    return
+  fi
+  printf '%s' "$path"
+}
+
+add_display_line() {
+  local kind line destination branch section pr_number
+  kind=$1
+  line=$2
+  destination=$3
+  branch=${4-}
+  section=${5-}
+  pr_number=${6-}
+  DISPLAY_KINDS+=("$kind")
+  DISPLAY_LINES+=("$line")
+  DISPLAY_DESTINATIONS+=("$destination")
+  DISPLAY_BRANCHES+=("$branch")
+  DISPLAY_SECTIONS+=("$section")
+  DISPLAY_PR_NUMBERS+=("$pr_number")
+}
+
+flush_worktree() {
+  if [[ -z "$current_wt_path" ]]; then
+    return
+  fi
+
+  local label branch_short marker
+
+  if [[ "$current_wt_path" == "$expected_main_worktree" ]]; then
+    main_worktree=$current_wt_path
+    main_parent=$(dirname "$main_worktree")
+    repo_name=$(basename "$main_worktree")
+    label="main"
+  else
+    branch_short=""
+    if [[ -n "$current_branch" ]]; then
+      branch_short=${current_branch#refs/heads/}
+    fi
+    if [[ -n "$branch_short" ]]; then
+      label=$branch_short
+      BRANCH_NAMES_WITH_WORKTREE+=("$branch_short")
+    elif [[ -n "$current_head" ]]; then
+      label="detached@${current_head:0:7}"
+    else
+      label="detached"
+    fi
+  fi
+
+  marker=""
+  if [[ "$current_wt_path" == "$current_path" ]]; then
+    marker=" [current]"
+  fi
+
+  WORKTREE_PATHS+=("$current_wt_path")
+  WORKTREE_LABELS+=("$(join_fields "$label$marker" "$(display_path "$current_wt_path")" "$current_wt_path")")
+}
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+  if [[ -z "$line" ]]; then
+    flush_worktree
+    current_wt_path=""
+    current_branch=""
+    current_head=""
+    continue
+  fi
+
+  case "$line" in
+    worktree\ *)
+      current_wt_path=${line#worktree }
+      ;;
+    branch\ *)
+      current_branch=${line#branch }
+      ;;
+    HEAD\ *)
+      current_head=${line#HEAD }
+      ;;
+  esac
+done < <(git worktree list --porcelain)
+
+flush_worktree
+
+if [[ -z "$main_worktree" ]]; then
+  echo "cdwt: failed to detect the main worktree" >&2
+  exit 1
+fi
+
+if [[ $main_only -eq 1 ]]; then
+  printf '%s\n' "$main_worktree"
+  exit 0
+fi
+
+make_branch_path() {
+  local branch repo_parent branch_slug candidate
+  branch=$1
+  repo_parent=$(dirname "$main_worktree")
+  branch_slug=${branch//\//-}
+  branch_slug=${branch_slug// /-}
+  branch_slug=${branch_slug//[^[:alnum:]._-]/-}
+  branch_slug=${branch_slug#-}
+  branch_slug=${branch_slug%-}
+  if [[ -z "$branch_slug" ]]; then
+    branch_slug="worktree"
+  fi
+  candidate="${repo_parent}/${repo_name}-${branch_slug}"
+  printf '%s\n' "$candidate"
+}
+
+make_pr_path() {
+  local pr_number
+  pr_number=$1
+  printf '%s\n' "$(dirname "$main_worktree")/${repo_name}-pr-${pr_number}"
+}
+
+root_marker=""
+if [[ "$main_worktree" == "$current_path" ]]; then
+  root_marker=" [current]"
+fi
+add_display_line "worktree" "$(join_fields "${repo_name}${root_marker}" "." "$main_worktree")" "$main_worktree" "" "root"
+
+for i in "${!WORKTREE_PATHS[@]}"; do
+  if [[ "${WORKTREE_PATHS[$i]}" == "$main_worktree" ]]; then
+    continue
+  fi
+  add_display_line "worktree" "${WORKTREE_LABELS[$i]}" "${WORKTREE_PATHS[$i]}" "" "worktree"
+done
+
+if command -v gh >/dev/null 2>&1; then
+  while IFS=$'\t' read -r pr_number pr_branch pr_title; do
+    [[ -z "$pr_number" || -z "$pr_branch" ]] && continue
+    if has_branch_worktree "$pr_branch"; then
+      continue
+    fi
+    PR_BRANCH_NAMES+=("$pr_branch")
+    target_path=$(make_pr_path "$pr_number")
+    add_display_line "pr" "$(join_fields "#${pr_number} ${pr_title}" "$(display_path "$target_path")" "$target_path")" "$target_path" "$pr_branch" "github pr" "$pr_number"
+  done < <(
+    gh pr list --limit 100 --json number,title,headRefName --template '{{range .}}{{.number}}{{"\t"}}{{.headRefName}}{{"\t"}}{{.title}}{{"\n"}}{{end}}' 2>/dev/null
+  )
+fi
+
+while IFS= read -r branch; do
+  [[ -z "$branch" ]] && continue
+  if has_branch_worktree "$branch"; then
+    continue
+  fi
+  if has_pr_branch "$branch"; then
+    continue
+  fi
+  target_path=$(make_branch_path "$branch")
+  add_display_line "branch" "$(join_fields "$branch" "$(display_path "$target_path")" "$target_path")" "$target_path" "$branch" "local branch"
+done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+if [[ ${#DISPLAY_LINES[@]} -eq 0 ]]; then
+  echo "cdwt: no worktree or branch candidates found" >&2
+  exit 1
+fi
+
+choose_line() {
+  local selected line i choice line_number section result key
+  local root_count=0
+  local worktree_count=0
+  local pr_count=0
+  local local_branch_count=0
+  local section_index=0
+  local header_text=""
+  local border_label=""
+  local list_height="60%"
+  local -a section_labels=()
+  local -a section_keys=()
+  local -a scoped_lines=()
+
+  for i in "${!DISPLAY_LINES[@]}"; do
+    case "${DISPLAY_SECTIONS[$i]}" in
+      root) root_count=$((root_count + 1)) ;;
+      worktree) worktree_count=$((worktree_count + 1)) ;;
+      "github pr") pr_count=$((pr_count + 1)) ;;
+      "local branch") local_branch_count=$((local_branch_count + 1)) ;;
+    esac
+  done
+
+  if (( root_count > 0 )); then
+    section_labels+=("root (${root_count})")
+    section_keys+=("root")
+  fi
+  if (( worktree_count > 0 )); then
+    section_labels+=("worktree (${worktree_count})")
+    section_keys+=("worktree")
+  fi
+  if (( pr_count > 0 )); then
+    section_labels+=("github pr (${pr_count})")
+    section_keys+=("github pr")
+  fi
+  if (( local_branch_count > 0 )); then
+    section_labels+=("local branch (${local_branch_count})")
+    section_keys+=("local branch")
+  fi
+
+  if command -v fzf >/dev/null 2>&1; then
+    while true; do
+      if [[ -z "$section" ]]; then
+        if (( ${#section_labels[@]} > 1 )); then
+          selected=$(
+            printf '%s\n' "${section_labels[@]}" | \
+              fzf \
+                --prompt='section> ' \
+                --height='~20%' \
+                --reverse \
+                --border \
+                --layout=reverse \
+                --info=inline-right \
+                --border-label=' sections ' \
+                --header='root / worktree / github pr / local branch'
+          )
+          [[ -z "$selected" ]] && return 0
+          for i in "${!section_labels[@]}"; do
+            if [[ "${section_labels[$i]}" == "$selected" ]]; then
+              section_index=$i
+              section=${section_keys[$i]}
+              break
+            fi
+          done
+        else
+          section_index=0
+          section=${section_keys[0]}
+        fi
+      fi
+
+      scoped_lines=()
+      for i in "${!DISPLAY_LINES[@]}"; do
+        if [[ "${DISPLAY_SECTIONS[$i]}" == "$section" ]]; then
+          scoped_lines+=("${DISPLAY_LINES[$i]}")
+        fi
+      done
+
+      case "$section" in
+        root)
+          header_text='main repository'
+          border_label=' root '
+          list_height='~20%'
+          ;;
+        worktree)
+          header_text='existing worktrees'
+          border_label=' worktree '
+          list_height='60%'
+          ;;
+        "github pr")
+          header_text='open pull requests'
+          border_label=' github pr '
+          list_height='60%'
+          ;;
+        "local branch")
+          header_text='local branches without worktree'
+          border_label=' local branch '
+          list_height='60%'
+          ;;
+        *)
+          echo "cdwt: unknown section" >&2
+          exit 1
+          ;;
+      esac
+
+      result=$(
+        printf '%s\n' "${scoped_lines[@]}" | \
+          fzf \
+            --prompt='cdwt> ' \
+            --delimiter="$FIELD_SEP" \
+            --nth=1 \
+            --expect=esc,tab,btab \
+            --height="$list_height" \
+            --reverse \
+            --border \
+            --layout=reverse \
+            --info=inline-right \
+            --border-label="$border_label" \
+            --preview-label=' location ' \
+            --preview-label-pos=2 \
+            --header="$header_text" \
+            --footer='esc: sections  tab: next  shift-tab: prev' \
+            --preview 'if [ -n "{3}" ]; then printf "location: %s\n" {3}; fi' \
+            --preview-window='down:3:wrap'
+      )
+      [[ -z "$result" ]] && return 0
+      key=${result%%$'\n'*}
+      if [[ "$result" == *$'\n'* ]]; then
+        selected=${result#*$'\n'}
+      else
+        selected=""
+      fi
+
+      case "$key" in
+        esc)
+          section=""
+          continue
+          ;;
+        tab)
+          section_index=$(((section_index + 1) % ${#section_keys[@]}))
+          section=${section_keys[$section_index]}
+          continue
+          ;;
+        btab)
+          section_index=$(((section_index + ${#section_keys[@]} - 1) % ${#section_keys[@]}))
+          section=${section_keys[$section_index]}
+          continue
+          ;;
+      esac
+
+      [[ -z "$selected" ]] && return 0
+      printf '%s\n' "$selected"
+      return 0
+    done
+  fi
+
+  while true; do
+    echo "Sections:" >&2
+    line_number=1
+    for i in "${!section_labels[@]}"; do
+      printf '%2d) %s\n' "$line_number" "${section_labels[$i]}" >&2
+      line_number=$((line_number + 1))
+    done
+    printf 'Select a section: ' >&2
+    read -r choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice >= line_number )); then
+      echo "cdwt: invalid selection" >&2
+      continue
+    fi
+    section=${section_keys[choice-1]}
+    break
+  done
+
+  while true; do
+    echo >&2
+    echo "$section" >&2
+    line_number=1
+    for i in "${!DISPLAY_LINES[@]}"; do
+      if [[ "${DISPLAY_SECTIONS[$i]}" == "$section" ]]; then
+        line=${DISPLAY_LINES[$i]}
+        IFS="$FIELD_SEP" read -r name short_path full_path <<< "$line"
+        printf '%2d) %s\n' "$line_number" "$name" >&2
+        line_number=$((line_number + 1))
+      fi
+    done
+    printf 'Select a destination: ' >&2
+    read -r choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice >= line_number )); then
+      echo "cdwt: invalid selection" >&2
+      continue
+    fi
+    line_number=1
+    for i in "${!DISPLAY_LINES[@]}"; do
+      if [[ "${DISPLAY_SECTIONS[$i]}" == "$section" ]]; then
+        if (( line_number == choice )); then
+          printf '%s\n' "${DISPLAY_LINES[$i]}"
+          return 0
+        fi
+        line_number=$((line_number + 1))
+      fi
+    done
+  done
+}
+
+confirm_create() {
+  local branch path reply
+  branch=$1
+  path=$2
+  printf 'Create worktree for "%s" at "%s"? [y/N] ' "$branch" "$path" >&2
+  read -r reply
+  [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+create_worktree() {
+  local branch path
+  branch=$1
+  path=$2
+
+  if [[ -e "$path" ]]; then
+    echo "cdwt: destination already exists: $path" >&2
+    exit 1
+  fi
+
+  git worktree add "$path" "$branch" >&2
+  printf '%s\n' "$path"
+}
+
+create_pr_worktree() {
+  local pr_number path
+  pr_number=$1
+  path=$2
+
+  if [[ -e "$path" ]]; then
+    echo "cdwt: destination already exists: $path" >&2
+    exit 1
+  fi
+
+  git worktree add --detach "$path" >&2
+  if ! (
+    cd "$path" &&
+    gh pr checkout "$pr_number" >&2
+  ); then
+    git worktree remove --force "$path" >&2 || true
+    echo "cdwt: failed to checkout PR #$pr_number" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$path"
+}
+
+selected_line=$(choose_line)
+[[ -z "$selected_line" ]] && exit 130
+
+selected_index=-1
+for i in "${!DISPLAY_LINES[@]}"; do
+  if [[ "${DISPLAY_LINES[$i]}" == "$selected_line" ]]; then
+    selected_index=$i
+    break
+  fi
+done
+
+if (( selected_index < 0 )); then
+  echo "cdwt: failed to resolve selection" >&2
+  exit 1
+fi
+
+case "${DISPLAY_KINDS[$selected_index]}" in
+  worktree)
+    printf '%s\n' "${DISPLAY_DESTINATIONS[$selected_index]}"
+    ;;
+  branch)
+    branch_name=${DISPLAY_BRANCHES[$selected_index]}
+    target_path=${DISPLAY_DESTINATIONS[$selected_index]}
+    if ! confirm_create "$branch_name" "$target_path"; then
+      exit 130
+    fi
+    create_worktree "$branch_name" "$target_path"
+    ;;
+  pr)
+    pr_number=${DISPLAY_PR_NUMBERS[$selected_index]}
+    target_path=${DISPLAY_DESTINATIONS[$selected_index]}
+    if ! confirm_create "PR #${pr_number}" "$target_path"; then
+      exit 130
+    fi
+    create_pr_worktree "$pr_number" "$target_path"
+    ;;
+  *)
+    echo "cdwt: unknown selection" >&2
+    exit 1
+    ;;
+esac
