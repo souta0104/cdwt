@@ -16,7 +16,7 @@ If `fzf` is unavailable, `cdwt` falls back to a numbered prompt.
 ## Install
 
 ```sh
-git clone <repo-url>
+git clone https://github.com/souta0104/cdwt.git
 cd cdwt
 ./install.sh
 ```
