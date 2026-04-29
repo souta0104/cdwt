@@ -59,13 +59,15 @@ Selecting a branch without a worktree asks for confirmation, then runs `git work
 <repo-parent>/<repo-name>-<branch-name>
 ```
 
-Selecting a GitHub PR asks for confirmation, creates a detached worktree, and runs:
+Selecting a GitHub PR with no existing worktree asks for confirmation, creates a detached worktree, and runs:
 
 ```sh
 gh pr checkout <pr-number>
 ```
 
 inside that worktree.
+
+If the PR's head branch already has a local worktree, the `github pr` section shows that existing path and selecting it jumps there directly.
 
 In the item selector:
 

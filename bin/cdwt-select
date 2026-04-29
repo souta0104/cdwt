@@ -52,6 +52,7 @@ repo_name=""
 current_path=$git_root
 
 declare -a WORKTREE_PATHS=()
+declare -a WORKTREE_BRANCHES=()
 declare -a WORKTREE_LABELS=()
 declare -a BRANCH_NAMES_WITH_WORKTREE=()
 declare -a PR_BRANCH_NAMES=()
@@ -71,6 +72,19 @@ has_branch_worktree() {
   branch=$1
   for existing in "${BRANCH_NAMES_WITH_WORKTREE[@]}"; do
     [[ "$existing" == "$branch" ]] && return 0
+  done
+  return 1
+}
+
+branch_worktree_path() {
+  local branch i worktree_branch
+  branch=$1
+  for i in "${!WORKTREE_PATHS[@]}"; do
+    worktree_branch=${WORKTREE_BRANCHES[$i]-}
+    if [[ "$worktree_branch" == "$branch" ]]; then
+      printf '%s\n' "${WORKTREE_PATHS[$i]}"
+      return 0
+    fi
   done
   return 1
 }
@@ -163,6 +177,7 @@ flush_worktree() {
   fi
 
   WORKTREE_PATHS+=("$current_wt_path")
+  WORKTREE_BRANCHES+=("$branch_short")
   WORKTREE_LABELS+=("$(join_fields "$label$marker" "$(display_path "$current_wt_path")" "$current_wt_path")")
 }
 
@@ -237,12 +252,14 @@ done
 
 if command -v gh >/dev/null 2>&1; then
   while IFS=$'\t' read -r pr_number pr_branch pr_title; do
+    pr_worktree_path=""
     [[ -z "$pr_number" || -z "$pr_branch" ]] && continue
-    if has_branch_worktree "$pr_branch"; then
-      continue
-    fi
     PR_BRANCH_NAMES+=("$pr_branch")
-    target_path=$(make_pr_path "$pr_number")
+    if pr_worktree_path=$(branch_worktree_path "$pr_branch"); then
+      target_path=$pr_worktree_path
+    else
+      target_path=$(make_pr_path "$pr_number")
+    fi
     add_display_line "pr" "$(join_fields "#${pr_number} ${pr_title}" "$(display_path "$target_path")" "$target_path")" "$target_path" "$pr_branch" "github pr" "$pr_number"
   done < <(
     gh pr list --limit 100 --json number,title,headRefName --template '{{range .}}{{.number}}{{"\t"}}{{.headRefName}}{{"\t"}}{{.title}}{{"\n"}}{{end}}' 2>/dev/null
@@ -545,7 +562,12 @@ case "${DISPLAY_KINDS[$selected_index]}" in
     ;;
   pr)
     pr_number=${DISPLAY_PR_NUMBERS[$selected_index]}
+    pr_branch=${DISPLAY_BRANCHES[$selected_index]}
     target_path=${DISPLAY_DESTINATIONS[$selected_index]}
+    if has_branch_worktree "$pr_branch"; then
+      printf '%s\n' "$target_path"
+      exit 0
+    fi
     if ! confirm_create "PR #${pr_number}" "$target_path"; then
       exit 130
     fi
