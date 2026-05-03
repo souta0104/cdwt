@@ -9,6 +9,7 @@ Interactive `git worktree` switcher for `zsh`.
 - `git`
 - `zsh`
 - `fzf` recommended
+- `jq` when using `.cdwt/settings.json`
 - `gh` optional for GitHub PR worktree creation
 
 If `fzf` is unavailable, `cdwt` falls back to a numbered prompt.
@@ -78,6 +79,37 @@ gh pr checkout <pr-number>
 inside that worktree.
 
 If the PR's head branch already has a local worktree, the `github pr` section shows that existing path and selecting it jumps there directly.
+
+Ignored files can be copied into new worktrees with `.cdwt/settings.json`:
+
+```json
+{
+  "copyIgnored": {
+    "paths": [
+      ".claude/settings.local.json"
+    ],
+    "patterns": [
+      ".claude/**",
+      ".codex/skills/**",
+      "CLAUDE.md",
+      "AGENTS.md",
+      "*.local.json"
+    ]
+  }
+}
+```
+
+`cdwt` reads config files from weak to strong. The nearest file wins when the same key is set.
+
+- `$HOME/.cdwt/settings.json`
+- `.cdwt/settings.json` in parent directories
+- `.cdwt/settings.json` nearest to the directory where `cdwt` was run
+
+Set `CDWT_CONFIG=/path/to/settings.json` to read only that file.
+
+`copyIgnored.paths` accepts repo-relative paths. `copyIgnored.patterns` accepts glob patterns. A pattern with `/` matches the repo-relative path. A pattern without `/` matches any file name or directory name.
+
+Only files ignored by Git are copied.
 
 In the item selector:
 

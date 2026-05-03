@@ -59,6 +59,9 @@ declare -a WORKTREE_BRANCHES=()
 declare -a WORKTREE_LABELS=()
 declare -a BRANCH_NAMES_WITH_WORKTREE=()
 declare -a PR_BRANCH_NAMES=()
+declare -a CONFIG_FILES=()
+declare -a COPY_IGNORED_PATHS=()
+declare -a COPY_IGNORED_PATTERNS=()
 declare -a DISPLAY_LINES=()
 declare -a DISPLAY_DESTINATIONS=()
 declare -a DISPLAY_BRANCHES=()
@@ -681,6 +684,170 @@ confirm_delete() {
   [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+add_config_file() {
+  local file existing i count
+  file=$1
+
+  [[ -f "$file" ]] || return 0
+
+  count=${#CONFIG_FILES[@]}
+  for ((i = 0; i < count; i++)); do
+    existing=${CONFIG_FILES[$i]}
+    [[ "$existing" == "$file" ]] && return 0
+  done
+
+  CONFIG_FILES+=("$file")
+}
+
+discover_config_files() {
+  local scan_path count i
+  declare -a scan_dirs=()
+
+  if [[ -n "${CDWT_CONFIG-}" ]]; then
+    if [[ ! -f "$CDWT_CONFIG" ]]; then
+      echo "cdwt: config file not found: $CDWT_CONFIG" >&2
+      exit 1
+    fi
+    CONFIG_FILES+=("$CDWT_CONFIG")
+    return 0
+  fi
+
+  add_config_file "$HOME/.cdwt/settings.json"
+
+  scan_path=$cwd
+  if [[ "$scan_path" != "$main_worktree" && "$scan_path" != "$main_worktree/"* ]]; then
+    scan_path=$main_worktree
+  fi
+
+  while true; do
+    scan_dirs+=("$scan_path")
+    [[ "$scan_path" == "/" ]] && break
+    scan_path=$(dirname "$scan_path")
+  done
+
+  count=${#scan_dirs[@]}
+  for ((i = count - 1; i >= 0; i--)); do
+    add_config_file "${scan_dirs[$i]}/.cdwt/settings.json"
+  done
+}
+
+read_configured_copy_rules() {
+  local config_file
+
+  discover_config_files
+  [[ ${#CONFIG_FILES[@]} -gt 0 ]] || return 0
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "cdwt: jq is required to read .cdwt/settings.json" >&2
+    exit 1
+  fi
+
+  for config_file in "${CONFIG_FILES[@]}"; do
+    if ! jq -e '
+      (.copyIgnored // {}) as $copy |
+      ($copy | type == "object") and
+      (($copy.paths // []) | type == "array" and all(.[]; type == "string")) and
+      (($copy.patterns // []) | type == "array" and all(.[]; type == "string"))
+    ' "$config_file" >/dev/null; then
+      echo "cdwt: invalid config: $config_file" >&2
+      exit 1
+    fi
+  done
+
+  while IFS= read -r -d '' config_file; do
+    COPY_IGNORED_PATHS+=("$config_file")
+  done < <(jq -srj 'reduce .[] as $item ({}; . * $item) | (.copyIgnored.paths // [])[] | .,"\u0000"' "${CONFIG_FILES[@]}")
+
+  while IFS= read -r -d '' config_file; do
+    COPY_IGNORED_PATTERNS+=("$config_file")
+  done < <(jq -srj 'reduce .[] as $item ({}; . * $item) | (.copyIgnored.patterns // [])[] | .,"\u0000"' "${CONFIG_FILES[@]}")
+}
+
+validate_copy_path() {
+  local relative_path
+  relative_path=$1
+
+  if [[ -z "$relative_path" || "$relative_path" == /* || "$relative_path" == *"/../"* || "$relative_path" == ../* || "$relative_path" == ".." ]]; then
+    echo "cdwt: refusing unsafe copy path: $relative_path" >&2
+    exit 1
+  fi
+}
+
+copy_one_ignored_path() {
+  local source_path destination_path relative_path source_item destination_item destination_dir
+  source_path=$1
+  destination_path=$2
+  relative_path=$3
+
+  validate_copy_path "$relative_path"
+
+  source_item=$source_path/$relative_path
+  destination_item=$destination_path/$relative_path
+
+  if [[ ! -e "$source_item" ]]; then
+    return 0
+  fi
+
+  if ! git -C "$source_path" check-ignore -q -- "$relative_path"; then
+    echo "cdwt: copy path is not ignored by git, skipping: $relative_path" >&2
+    return 0
+  fi
+
+  if [[ -d "$source_item" ]]; then
+    mkdir -p "$destination_item"
+    cp -pR "$source_item/." "$destination_item"
+    return 0
+  fi
+
+  destination_dir=$(dirname "$destination_item")
+  mkdir -p "$destination_dir"
+  cp -p "$source_item" "$destination_item"
+}
+
+copy_pattern_matches_path() {
+  local relative_path pattern base count i
+  relative_path=$1
+  base=$(basename "$relative_path")
+  count=${#COPY_IGNORED_PATTERNS[@]}
+
+  for ((i = 0; i < count; i++)); do
+    pattern=${COPY_IGNORED_PATTERNS[$i]}
+    validate_copy_path "$pattern"
+
+    if [[ "$pattern" == *"/"* ]]; then
+      [[ "$relative_path" == $pattern ]] && return 0
+      continue
+    fi
+
+    if [[ "$base" == $pattern || "$relative_path" == "$pattern" || "$relative_path" == "$pattern/"* || "$relative_path" == */"$pattern" || "$relative_path" == */"$pattern"/* ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+copy_configured_ignored_paths() {
+  local source_path destination_path relative_path count i
+  source_path=$1
+  destination_path=$2
+
+  read_configured_copy_rules
+
+  count=${#COPY_IGNORED_PATHS[@]}
+  for ((i = 0; i < count; i++)); do
+    copy_one_ignored_path "$source_path" "$destination_path" "${COPY_IGNORED_PATHS[$i]}"
+  done
+
+  [[ ${#COPY_IGNORED_PATTERNS[@]} -gt 0 ]] || return 0
+
+  while IFS= read -r -d '' relative_path; do
+    if copy_pattern_matches_path "$relative_path"; then
+      copy_one_ignored_path "$source_path" "$destination_path" "$relative_path"
+    fi
+  done < <(git -C "$source_path" ls-files --others --ignored --exclude-standard -z)
+}
+
 create_worktree() {
   local branch path
   branch=$1
@@ -692,6 +859,7 @@ create_worktree() {
   fi
 
   git worktree add "$path" "$branch" >&2
+  copy_configured_ignored_paths "$main_worktree" "$path"
   printf '%s\n' "$path"
 }
 
@@ -754,6 +922,7 @@ create_new_worktree() {
   fi
 
   git worktree add -b "$branch" "$path" "$base_ref" >&2
+  copy_configured_ignored_paths "$main_worktree" "$path"
   printf '%s\n' "$path"
 }
 
@@ -777,6 +946,7 @@ create_pr_worktree() {
     exit 1
   fi
 
+  copy_configured_ignored_paths "$main_worktree" "$path"
   printf '%s\n' "$path"
 }
 
