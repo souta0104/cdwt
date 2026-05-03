@@ -3,12 +3,12 @@ cdwt() {
 
   case "${1-}" in
     -h|--help)
-      "$HOME/.local/bin/cdwt-select" "$@"
+      cdwt-select "$@"
       return $?
       ;;
   esac
 
-  if ! destination="$("$HOME/.local/bin/cdwt-select" "$@")"; then
+  if ! destination="$(cdwt-select "$@")"; then
     return $?
   fi
 

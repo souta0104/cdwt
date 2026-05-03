@@ -1,45 +1,42 @@
 # cdwt
 
-Interactive `git worktree` switcher for `zsh`.
+Interactive `git worktree` switcher for `zsh`. Pick an existing worktree, jump
+back to the default branch worktree, create a new worktree from the default
+branch, check out a GitHub PR into a worktree, or delete one — and `cd` into
+the result.
 
-`cdwt` lets you pick an existing worktree, jump back to the default branch worktree, or create a new linked worktree and `cd` into it.
+Written in TypeScript, distributed as an `npx`-installable CLI plus a small
+`zsh` function that performs the `cd`.
 
 ## Requirements
 
+- Node.js 20+
 - `git`
 - `zsh`
-- `fzf` recommended
-- `jq` when using `.cdwt/settings.json`
-- `gh` optional for GitHub PR worktree creation
-
-If `fzf` is unavailable, `cdwt` falls back to a numbered prompt.
+- `fzf` recommended — without it the selector falls back to a numbered prompt
+- `gh` optional — enables the `github pr` section
 
 ## Install
 
+Try it once:
+
 ```sh
-git clone https://github.com/souta0104/cdwt.git
-cd cdwt
-./install.sh
+npx cdwt --default-branch     # prints the main worktree path
 ```
 
-The installer:
-
-- copies `cdwt-select` to `~/.local/bin`
-- copies the `zsh` wrapper to `~/.local/share/cdwt/cdwt.zsh`
-- adds `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` if missing
-- adds `source "$HOME/.local/share/cdwt/cdwt.zsh"` to `~/.zshrc` if missing
-
-Then reload your shell:
+Install for daily use:
 
 ```sh
+pnpm add -g cdwt              # or: npm i -g cdwt
+cdwt-select install           # writes shell function + sources it from ~/.zshrc
 exec zsh -l
 ```
 
-Or:
-
-```sh
-source ~/.zshrc
-```
+`cdwt-select install` writes `~/.local/share/cdwt/cdwt.zsh` and adds
+`source "$HOME/.local/share/cdwt/cdwt.zsh"` to `~/.zshrc` (skipped if already
+present). The shell function is required because a child process can't change
+the parent shell's directory: `cdwt-select` prints the destination path on
+stdout and the function `cd`s into it.
 
 ## Usage
 
@@ -47,90 +44,120 @@ source ~/.zshrc
 cdwt
 ```
 
-This opens a selector with:
+Opens a selector grouped into sections (in this order):
 
-- `root`
-- `worktree`
-- `new worktree`
-- `delete worktree`
-- `github pr` when `gh` is available
-- `local branch`
-
-Selecting `new worktree` asks for a new branch name and creates it from the default branch into:
-
-```text
-<repo-parent>/<repo-name>-<branch-name>
-```
-
-Selecting a branch without a worktree asks for confirmation, then runs `git worktree add` into:
-
-```text
-<repo-parent>/<repo-name>-<branch-name>
-```
-
-Selecting `delete worktree` asks for confirmation, removes the selected worktree, and returns to the default branch worktree.
-
-Selecting a GitHub PR with no existing worktree asks for confirmation, creates a detached worktree, and runs:
+| Section           | Action on selection                                           |
+| ----------------- | ------------------------------------------------------------- |
+| `root`            | `cd` into the main worktree                                   |
+| `worktree`        | `cd` into an existing linked worktree                         |
+| `new worktree`    | prompts for a branch name, creates it from the default branch |
+| `delete worktree` | confirms, removes the worktree, then returns to root          |
+| `github pr`       | `cd` into the PR's worktree (creates a detached one if new)   |
+| `local branch`    | confirms, runs `git worktree add` for that branch             |
 
 ```sh
-gh pr checkout <pr-number>
+cdwt --default-branch         # skip the picker, jump to the main worktree
+cdwt -h                       # show help (bypasses the shell wrapper)
 ```
 
-inside that worktree.
+`--default-branch` jumps to the main worktree (the one that holds the
+non-bare `.git` directory), not literally to a worktree of `origin/HEAD`.
+In a typical setup these are the same; if you've checked out a different
+branch in the main worktree, that's what you'll land on.
 
-If the PR's head branch already has a local worktree, the `github pr` section shows that existing path and selecting it jumps there directly.
+### New worktree paths
 
-Ignored files can be copied into new worktrees with `.cdwt/settings.json`:
+`new worktree` and `local branch` create the worktree at:
+
+```
+<repo-parent>/<repo-name>-<branch-slug>
+```
+
+`<branch-slug>` replaces `/`, spaces, and any non-`[A-Za-z0-9._-]` character
+with `-`, then trims leading/trailing dashes (e.g. `feature/awesome` →
+`repo-feature-awesome`).
+
+`github pr` for a branch without a local worktree creates:
+
+```
+<repo-parent>/<repo-name>-pr-<pr-number>
+```
+
+…then runs `gh pr checkout <pr-number>` inside it.
+
+### Selector keys
+
+With `fzf`:
+
+- `esc` — return to the section list
+- `tab` / `shift-tab` — move between sections
+- type in the section list — opens a cross-section fuzzy search
+
+Without `fzf`: numbered prompt for the section, then for the entry.
+
+## Configuration
+
+`.cdwt/settings.json` controls which Git-ignored files get copied into newly
+created worktrees:
 
 ```json
 {
   "copyIgnored": {
-    "paths": [
-      ".claude/settings.local.json"
-    ],
-    "patterns": [
-      ".claude/**",
-      ".codex/skills/**",
-      "CLAUDE.md",
-      "AGENTS.md",
-      "*.local.json"
-    ]
+    "paths": [".claude/settings.local.json"],
+    "patterns": [".claude/**", "CLAUDE.md", "*.local.json"]
   }
 }
 ```
 
-`cdwt` reads config files from weak to strong. The nearest file wins when the same key is set.
+- `paths` — repo-relative file or directory paths copied verbatim
+- `patterns` — glob patterns matched against repo-relative paths
+  - a pattern containing `/` matches the whole path
+  - a pattern without `/` matches any file or directory of that name
 
-- `$HOME/.cdwt/settings.json`
-- `.cdwt/settings.json` in parent directories
-- `.cdwt/settings.json` nearest to the directory where `cdwt` was run
+Only files Git considers ignored are copied. Patterns and paths that escape
+the worktree (`..`, absolute, …) are rejected.
 
-Set `CDWT_CONFIG=/path/to/settings.json` to read only that file.
+### Config resolution order (weak → strong)
 
-`copyIgnored.paths` accepts repo-relative paths. `copyIgnored.patterns` accepts glob patterns. A pattern with `/` matches the repo-relative path. A pattern without `/` matches any file name or directory name.
+Later files override matching keys; missing keys leave earlier values intact.
+An explicit empty array clears the inherited value.
 
-Only files ignored by Git are copied.
+1. `$HOME/.cdwt/settings.json`
+2. `.cdwt/settings.json` walking from `/` down to the cwd (or to the main
+   worktree if cwd is outside it)
 
-In the item selector:
+Set `CDWT_CONFIG=/path/to/settings.json` or pass `--config <file>` to read
+only that file.
 
-- `esc` returns to the section selector
-- `tab` moves to the next section
-- `shift-tab` moves to the previous section
-
-In the section selector, typing opens a cross-section search view showing matches from all sections.
-
-You can jump directly to the default branch worktree with:
+## Development
 
 ```sh
-cdwt --default-branch
+pnpm install
+pnpm test            # vitest
+pnpm typecheck       # tsc --noEmit
+pnpm lint            # eslint
+pnpm format          # prettier --write .
+pnpm build           # tsup → dist/cli.js
+pnpm dev -- --default-branch
+```
+
+Layout:
+
+```
+src/
+  cli.ts                   commander entry
+  commands/                select / install / actions (confirm + git ops)
+  core/                    pure functions (paths, config merge, sections, ...)
+  io/                      git, gh, fs, repo context
+  ui/                      fzf, prompts, selector flow
+shell/cdwt.zsh             zsh wrapper that cd's into stdout
+tests/                     vitest (pure + integration against a temp git repo)
 ```
 
 ## Uninstall
 
-Remove these files:
-
 ```sh
-rm -f ~/.local/bin/cdwt-select
+pnpm remove -g cdwt        # or: npm rm -g cdwt
 rm -f ~/.local/share/cdwt/cdwt.zsh
 ```
 
