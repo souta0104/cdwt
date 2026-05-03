@@ -9,7 +9,13 @@ export interface RunResult {
 export interface RunOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
-  /** When true, child stdio inherits the parent's terminal (for fzf, gh checkout, ...). */
+  /**
+   * When true, child stdio inherits the parent's terminal (for git worktree, gh checkout, ...).
+   * The child's stdout is redirected to the parent's stderr so the wrapper's
+   * `destination=$(cdwt-select)` capture stays clean — git writes "HEAD is now at ..." to
+   * stdout and would otherwise pollute the destination path. The user still sees the
+   * message because parent stderr is the terminal.
+   */
   inheritStdio?: boolean;
   /** Optional input to write on stdin. */
   input?: string;
@@ -26,7 +32,7 @@ export function run(
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const stdio: SpawnOptions["stdio"] = options.inheritStdio
-      ? "inherit"
+      ? ["inherit", process.stderr, "inherit"]
       : ["pipe", "pipe", "pipe"];
     const child = spawn(command, args, {
       cwd: options.cwd,

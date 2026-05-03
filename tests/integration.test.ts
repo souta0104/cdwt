@@ -106,6 +106,52 @@ describe("--default-branch CLI", () => {
   });
 });
 
+describe("inheritStdio keeps the parent's stdout clean", () => {
+  // Regression test for the shell-wrapper hang. The wrapper does
+  //   destination="$(cdwt-select)"
+  // so anything that escapes to the child's stdout other than the destination
+  // path corrupts the cd target. `git worktree add` writes "HEAD is now at ..."
+  // to stdout, and `inheritStdio: true` used to forward that into the parent's
+  // stdout. After the fix the child's stdout is rerouted to the parent's stderr.
+  it("forwards the inherited child's stdout to the parent's stderr only", async () => {
+    exec(repoDir, "git", ["branch", "feature"]);
+    const target = path.join(workdir, "repo-feature");
+    const driver = `
+      import { run } from "${path.join(process.cwd(), "src", "io", "exec.ts").replace(/\\\\/g, "/")}";
+      const r = await run("git", ["worktree", "add", ${JSON.stringify(target)}, "feature"], {
+        cwd: ${JSON.stringify(repoDir)},
+        inheritStdio: true,
+      });
+      process.stdout.write(${JSON.stringify(target)} + "\\n");
+      process.exit(r.exitCode);
+    `;
+    const { spawn } = await import("node:child_process");
+    const tsxBin = path.join(process.cwd(), "node_modules", ".bin", "tsx");
+    const result: { exitCode: number; stdout: string; stderr: string } = await new Promise(
+      (resolve, reject) => {
+        const child = spawn(tsxBin, ["--eval", driver, "--input-type=module"], {
+          cwd: repoDir,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout!.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
+        child.stderr!.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+        child.on("error", reject);
+        child.on("close", (code: number | null) =>
+          resolve({ exitCode: code ?? 0, stdout, stderr }),
+        );
+        child.stdin!.end();
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(target);
+    expect(result.stdout).not.toMatch(/HEAD is now at/);
+    expect(result.stderr).toMatch(/HEAD is now at/);
+    expect(result.stderr).toMatch(/Preparing worktree/);
+  });
+});
+
 function exec(cwd: string, command: string, args: string[]): void {
   execFileSync(command, args, { cwd, stdio: "pipe" });
 }
