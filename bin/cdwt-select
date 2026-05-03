@@ -6,13 +6,13 @@ FIELD_SEP=$'\x1f'
 
 usage() {
   cat <<'EOF'
-Usage: cdwt-select [--main]
+Usage: cdwt [--default-branch]
 
 Select a git worktree or branch and print the destination path.
 EOF
 }
 
-main_only=0
+default_branch_only=0
 if [[ $# -gt 1 ]]; then
   usage >&2
   exit 1
@@ -20,8 +20,8 @@ fi
 
 if [[ $# -eq 1 ]]; then
   case "$1" in
-    --main)
-      main_only=1
+    --default-branch)
+      default_branch_only=1
       ;;
     -h|--help)
       usage
@@ -50,6 +50,9 @@ main_worktree=""
 main_parent=""
 repo_name=""
 current_path=$git_root
+main_worktree_branch=""
+default_branch=""
+default_branch_ref=""
 
 declare -a WORKTREE_PATHS=()
 declare -a WORKTREE_BRANCHES=()
@@ -100,6 +103,53 @@ has_pr_branch() {
     existing=${PR_BRANCH_NAMES[$i]}
     [[ "$existing" == "$branch" ]] && return 0
   done
+  return 1
+}
+
+resolve_default_branch() {
+  local remote_head candidate count i
+
+  if remote_head=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+    default_branch=${remote_head#origin/}
+  fi
+
+  if [[ -z "$default_branch" && -n "$main_worktree_branch" ]]; then
+    default_branch=$main_worktree_branch
+  fi
+
+  if [[ -z "$default_branch" ]]; then
+    for candidate in main master; do
+      if git show-ref --verify --quiet "refs/heads/$candidate" ||
+        git show-ref --verify --quiet "refs/remotes/origin/$candidate"; then
+        default_branch=$candidate
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$default_branch" ]]; then
+    return 1
+  fi
+
+  if git show-ref --verify --quiet "refs/heads/$default_branch"; then
+    default_branch_ref=$default_branch
+    return 0
+  fi
+
+  if git show-ref --verify --quiet "refs/remotes/origin/$default_branch"; then
+    default_branch_ref="origin/$default_branch"
+    return 0
+  fi
+
+  count=${#WORKTREE_BRANCHES[@]}
+  for ((i = 0; i < count; i++)); do
+    candidate=${WORKTREE_BRANCHES[$i]-}
+    if [[ "$candidate" == "$default_branch" ]]; then
+      default_branch_ref=$default_branch
+      return 0
+    fi
+  done
+
   return 1
 }
 
@@ -169,6 +219,9 @@ flush_worktree() {
     main_worktree=$current_wt_path
     main_parent=$(dirname "$main_worktree")
     repo_name=$(basename "$main_worktree")
+    if [[ -n "$current_branch" ]]; then
+      main_worktree_branch=${current_branch#refs/heads/}
+    fi
     label="main"
   else
     branch_short=""
@@ -224,7 +277,9 @@ if [[ -z "$main_worktree" ]]; then
   exit 1
 fi
 
-if [[ $main_only -eq 1 ]]; then
+resolve_default_branch || true
+
+if [[ $default_branch_only -eq 1 ]]; then
   printf '%s\n' "$main_worktree"
   exit 0
 fi
@@ -257,11 +312,23 @@ if [[ "$main_worktree" == "$current_path" ]]; then
 fi
 add_display_line "worktree" "$(join_fields "${repo_name}${root_marker}" "." "$main_worktree")" "$main_worktree" "" "root"
 
+if [[ -n "$default_branch_ref" ]]; then
+  add_display_line "new" "$(join_fields "create new worktree" "from $default_branch_ref" "")" "" "" "new worktree"
+fi
+
 for ((i = 0; i < ${#WORKTREE_PATHS[@]}; i++)); do
   if [[ "${WORKTREE_PATHS[$i]}" == "$main_worktree" ]]; then
     continue
   fi
   add_display_line "worktree" "${WORKTREE_LABELS[$i]}" "${WORKTREE_PATHS[$i]}" "" "worktree"
+done
+
+for ((i = 0; i < ${#WORKTREE_PATHS[@]}; i++)); do
+  if [[ "${WORKTREE_PATHS[$i]}" == "$main_worktree" ]]; then
+    continue
+  fi
+  IFS="$FIELD_SEP" read -r worktree_label worktree_short_path worktree_full_path <<< "${WORKTREE_LABELS[$i]}"
+  add_display_line "delete" "$(join_fields "delete $worktree_label" "$worktree_short_path" "$worktree_full_path")" "${WORKTREE_PATHS[$i]}" "" "delete worktree"
 done
 
 if command -v gh >/dev/null 2>&1; then
@@ -303,6 +370,8 @@ choose_line() {
   local worktree_count=0
   local pr_count=0
   local local_branch_count=0
+  local new_worktree_count=0
+  local delete_worktree_count=0
   local section_index=0
   local header_text=""
   local border_label=""
@@ -318,6 +387,8 @@ choose_line() {
       worktree) worktree_count=$((worktree_count + 1)) ;;
       "github pr") pr_count=$((pr_count + 1)) ;;
       "local branch") local_branch_count=$((local_branch_count + 1)) ;;
+      "new worktree") new_worktree_count=$((new_worktree_count + 1)) ;;
+      "delete worktree") delete_worktree_count=$((delete_worktree_count + 1)) ;;
     esac
   done
 
@@ -328,6 +399,14 @@ choose_line() {
   if (( worktree_count > 0 )); then
     section_labels+=("worktree (${worktree_count})")
     section_keys+=("worktree")
+  fi
+  if (( new_worktree_count > 0 )); then
+    section_labels+=("new worktree (${new_worktree_count})")
+    section_keys+=("new worktree")
+  fi
+  if (( delete_worktree_count > 0 )); then
+    section_labels+=("delete worktree (${delete_worktree_count})")
+    section_keys+=("delete worktree")
   fi
   if (( pr_count > 0 )); then
     section_labels+=("github pr (${pr_count})")
@@ -410,7 +489,7 @@ choose_line() {
                 --layout=reverse \
                 --info=inline-right \
                 --border-label=' sections ' \
-                --header='root / worktree / github pr / local branch'
+                --header='root / worktree / new worktree / delete worktree / github pr / local branch'
           )
           [[ -z "$result" ]] && return 0
           query=${result%%$'\n'*}
@@ -458,6 +537,16 @@ choose_line() {
         worktree)
           header_text='existing worktrees'
           border_label=' worktree '
+          list_height='60%'
+          ;;
+        "new worktree")
+          header_text='create a branch and worktree from the default branch'
+          border_label=' new worktree '
+          list_height='~20%'
+          ;;
+        "delete worktree")
+          header_text='delete an existing worktree'
+          border_label=' delete worktree '
           list_height='60%'
           ;;
         "github pr")
@@ -584,6 +673,14 @@ confirm_create() {
   [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+confirm_delete() {
+  local path reply
+  path=$1
+  printf 'Delete worktree at "%s"? [y/N] ' "$path" >&2
+  read -r reply
+  [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
 create_worktree() {
   local branch path
   branch=$1
@@ -595,6 +692,68 @@ create_worktree() {
   fi
 
   git worktree add "$path" "$branch" >&2
+  printf '%s\n' "$path"
+}
+
+delete_worktree() {
+  local path
+  path=$1
+
+  if [[ "$path" == "$main_worktree" ]]; then
+    echo "cdwt: refusing to delete the default branch worktree" >&2
+    exit 1
+  fi
+
+  (
+    cd "$main_worktree" &&
+      git worktree remove "$path" >&2
+  )
+
+  printf '%s\n' "$main_worktree"
+}
+
+read_new_branch_name() {
+  local branch
+  while true; do
+    printf 'New branch name: ' >&2
+    read -r branch
+
+    if [[ -z "$branch" ]]; then
+      return 1
+    fi
+
+    if ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+      echo "cdwt: invalid branch name: $branch" >&2
+      continue
+    fi
+
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      echo "cdwt: branch already exists: $branch" >&2
+      continue
+    fi
+
+    if has_branch_worktree "$branch"; then
+      echo "cdwt: branch already has a worktree: $branch" >&2
+      continue
+    fi
+
+    printf '%s\n' "$branch"
+    return 0
+  done
+}
+
+create_new_worktree() {
+  local branch path base_ref
+  branch=$1
+  path=$2
+  base_ref=$3
+
+  if [[ -e "$path" ]]; then
+    echo "cdwt: destination already exists: $path" >&2
+    exit 1
+  fi
+
+  git worktree add -b "$branch" "$path" "$base_ref" >&2
   printf '%s\n' "$path"
 }
 
@@ -641,6 +800,13 @@ case "${DISPLAY_KINDS[$selected_index]}" in
   worktree)
     printf '%s\n' "${DISPLAY_DESTINATIONS[$selected_index]}"
     ;;
+  delete)
+    target_path=${DISPLAY_DESTINATIONS[$selected_index]}
+    if ! confirm_delete "$target_path"; then
+      exit 130
+    fi
+    delete_worktree "$target_path"
+    ;;
   branch)
     branch_name=${DISPLAY_BRANCHES[$selected_index]}
     target_path=${DISPLAY_DESTINATIONS[$selected_index]}
@@ -648,6 +814,20 @@ case "${DISPLAY_KINDS[$selected_index]}" in
       exit 130
     fi
     create_worktree "$branch_name" "$target_path"
+    ;;
+  new)
+    if [[ -z "$default_branch_ref" ]]; then
+      echo "cdwt: failed to detect the default branch" >&2
+      exit 1
+    fi
+    if ! branch_name=$(read_new_branch_name); then
+      exit 130
+    fi
+    target_path=$(make_branch_path "$branch_name")
+    if ! confirm_create "$branch_name from $default_branch_ref" "$target_path"; then
+      exit 130
+    fi
+    create_new_worktree "$branch_name" "$target_path" "$default_branch_ref"
     ;;
   pr)
     pr_number=${DISPLAY_PR_NUMBERS[$selected_index]}

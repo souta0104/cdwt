@@ -1,6 +1,13 @@
 cdwt() {
   local destination
 
+  case "${1-}" in
+    -h|--help)
+      "$HOME/.local/bin/cdwt-select" "$@"
+      return $?
+      ;;
+  esac
+
   if ! destination="$("$HOME/.local/bin/cdwt-select" "$@")"; then
     return $?
   fi

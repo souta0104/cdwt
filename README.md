@@ -2,7 +2,7 @@
 
 Interactive `git worktree` switcher for `zsh`.
 
-`cdwt` lets you pick an existing worktree, jump back to the main worktree, or create a new linked worktree for an existing local branch and `cd` into it.
+`cdwt` lets you pick an existing worktree, jump back to the default branch worktree, or create a new linked worktree and `cd` into it.
 
 ## Requirements
 
@@ -50,14 +50,24 @@ This opens a selector with:
 
 - `root`
 - `worktree`
+- `new worktree`
+- `delete worktree`
 - `github pr` when `gh` is available
 - `local branch`
+
+Selecting `new worktree` asks for a new branch name and creates it from the default branch into:
+
+```text
+<repo-parent>/<repo-name>-<branch-name>
+```
 
 Selecting a branch without a worktree asks for confirmation, then runs `git worktree add` into:
 
 ```text
 <repo-parent>/<repo-name>-<branch-name>
 ```
+
+Selecting `delete worktree` asks for confirmation, removes the selected worktree, and returns to the default branch worktree.
 
 Selecting a GitHub PR with no existing worktree asks for confirmation, creates a detached worktree, and runs:
 
@@ -77,10 +87,10 @@ In the item selector:
 
 In the section selector, typing opens a cross-section search view showing matches from all sections.
 
-You can jump directly to the main worktree with:
+You can jump directly to the default branch worktree with:
 
 ```sh
-cdwt --main
+cdwt --default-branch
 ```
 
 ## Uninstall
