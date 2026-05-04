@@ -12,6 +12,8 @@ export interface DiscoverConfigsInput {
   home: string;
   /** Optional CDWT_CONFIG env override. */
   override?: string | undefined;
+  /** Optional debug callback; called for each path checked (hit/miss). */
+  debug?: (msg: string) => void;
 }
 
 /**
@@ -28,9 +30,12 @@ export async function discoverConfigFiles({
   mainWorktree,
   home,
   override,
+  debug,
 }: DiscoverConfigsInput): Promise<string[]> {
   if (override !== undefined) {
-    if (!(await fileExists(override))) {
+    const exists = await fileExists(override);
+    debug?.(`config override path=${override} exists=${exists}`);
+    if (!exists) {
       throw new CdwtError(`config file not found: ${override}`);
     }
     return [override];
@@ -40,7 +45,9 @@ export async function discoverConfigFiles({
   const files: string[] = [];
 
   const homeFile = path.join(home, ".cdwt", "settings.json");
-  if (await fileExists(homeFile)) {
+  const homeExists = await fileExists(homeFile);
+  debug?.(`config check path=${homeFile} hit=${homeExists}`);
+  if (homeExists) {
     seen.add(homeFile);
     files.push(homeFile);
   }
@@ -59,11 +66,14 @@ export async function discoverConfigFiles({
   for (let i = dirs.length - 1; i >= 0; i--) {
     const file = path.join(dirs[i]!, ".cdwt", "settings.json");
     if (seen.has(file)) continue;
-    if (await fileExists(file)) {
+    const exists = await fileExists(file);
+    debug?.(`config check path=${file} hit=${exists}`);
+    if (exists) {
       seen.add(file);
       files.push(file);
     }
   }
+  debug?.(`config discovery complete: found ${files.length} file(s): [${files.join(", ")}]`);
   return files;
 }
 

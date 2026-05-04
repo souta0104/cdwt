@@ -6,6 +6,17 @@ import type { Worktree } from "../types.js";
 import type { ConsoleIO } from "./console.js";
 import { run } from "./exec.js";
 
+/**
+ * Module-level debug hook. Set once at startup via `setGitDebug` when
+ * verbose mode is enabled. This avoids threading a console through every
+ * git helper signature.
+ */
+let _gitDebug: ((msg: string) => void) | undefined;
+
+export function setGitDebug(fn: (msg: string) => void): void {
+  _gitDebug = fn;
+}
+
 export interface GitContext {
   cwd: string;
   gitRoot: string;
@@ -104,7 +115,7 @@ export async function listIgnoredFiles(cwd: string): Promise<string[]> {
  * `git worktree add` invoked by hand and we never duplicate it.
  */
 async function runGitInherited(args: readonly string[], cwd: string): Promise<number> {
-  const result = await run("git", args, { cwd, inheritStdio: true });
+  const result = await run("git", args, { cwd, inheritStdio: true, onDebug: _gitDebug });
   return result.exitCode;
 }
 
@@ -138,11 +149,36 @@ export async function addWorktreeDetached(cwd: string, destination: string): Pro
   }
 }
 
-export async function removeWorktree(cwd: string, target: string): Promise<void> {
-  const code = await runGitInherited(["worktree", "remove", target], cwd);
-  if (code !== 0) {
-    throw new CdwtError(`git worktree remove failed for ${target} (exit ${code})`);
-  }
+export interface RemoveWorktreeResult {
+  exitCode: number;
+  stderr: string;
+}
+
+/**
+ * Attempt `git worktree remove` without force. Returns `{ exitCode, stderr }`
+ * rather than throwing so the caller can decide how to handle dirty-worktree failures.
+ */
+export async function removeWorktree(
+  cwd: string,
+  target: string,
+): Promise<RemoveWorktreeResult> {
+  const result = await run("git", ["worktree", "remove", target], { cwd, onDebug: _gitDebug });
+  return { exitCode: result.exitCode, stderr: result.stderr };
+}
+
+/**
+ * `git worktree remove --force`. Returns `{ exitCode, stderr }` so the caller
+ * can surface git's message and decide whether to throw.
+ */
+export async function removeWorktreeForceRaw(
+  cwd: string,
+  target: string,
+): Promise<RemoveWorktreeResult> {
+  const result = await run("git", ["worktree", "remove", "--force", target], {
+    cwd,
+    onDebug: _gitDebug,
+  });
+  return { exitCode: result.exitCode, stderr: result.stderr };
 }
 
 /**
@@ -155,7 +191,7 @@ export async function removeWorktreeForce(
   target: string,
   console: ConsoleIO,
 ): Promise<void> {
-  const result = await run("git", ["worktree", "remove", "--force", target], { cwd });
+  const result = await removeWorktreeForceRaw(cwd, target);
   if (result.exitCode === 0) return;
   if (result.stderr) console.err(result.stderr);
   console.errln(
@@ -164,5 +200,5 @@ export async function removeWorktreeForce(
 }
 
 async function runGit(args: readonly string[], options: { cwd: string }) {
-  return run("git", args, { cwd: options.cwd });
+  return run("git", args, { cwd: options.cwd, onDebug: _gitDebug });
 }

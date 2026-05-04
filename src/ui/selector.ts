@@ -45,6 +45,12 @@ export async function selectInteractive(
   if (sections.length === 0) return null;
 
   const useFzf = options.useFzf ?? (await isFzfAvailable());
+  const totalLines = allLines.length;
+  const sectionSummary = sections.map((s) => `${s.key}(${s.lines.length})`).join(", ");
+  options.console.debug(
+    `selector mode=${useFzf ? "fzf" : "prompt"} sections=${sections.length} totalLines=${totalLines} [${sectionSummary}]`,
+  );
+
   if (useFzf) {
     return selectWithFzf(allLines, sections, options.fzfRunner ?? runFzfDefault);
   }

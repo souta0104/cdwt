@@ -10,8 +10,11 @@ export class TestConsole implements ConsoleIO {
   isInteractive = true;
   private readonly outBuf: string[] = [];
   private readonly errBuf: string[] = [];
+  private readonly debugBuf: string[] = [];
   private readonly responses: (string | null)[] = [];
   private readonly prompts: string[] = [];
+  /** When true, debug() records lines into debugBuf. Default false (no-op). */
+  verbose = false;
 
   out(chunk: string): void {
     this.outBuf.push(chunk);
@@ -24,6 +27,10 @@ export class TestConsole implements ConsoleIO {
   }
   errln(message = ""): void {
     this.errBuf.push(`${message}\n`);
+  }
+  debug(message: string): void {
+    if (!this.verbose) return;
+    this.debugBuf.push(message);
   }
 
   ask(prompt: string): Promise<string | null> {
@@ -47,6 +54,9 @@ export class TestConsole implements ConsoleIO {
   }
   get stderr(): string {
     return this.errBuf.join("");
+  }
+  get debugLines(): readonly string[] {
+    return this.debugBuf;
   }
   get askedPrompts(): readonly string[] {
     return this.prompts;

@@ -3,6 +3,46 @@ import { describe, expect, it } from "vitest";
 import { createDefaultConsole } from "../src/io/console.js";
 import { TestConsole } from "../src/io/test-console.js";
 
+describe("ConsoleIO debug()", () => {
+  it("debug() is a no-op when verbose=false (default)", () => {
+    const stderr = new PassThrough();
+    const stdout = new PassThrough();
+    const stdin = new PassThrough();
+    let errChunks = "";
+    stderr.on("data", (c: Buffer) => (errChunks += c.toString("utf8")));
+    const console = createDefaultConsole({ stdin, stdout, stderr, verbose: false });
+    console.debug("should not appear");
+    expect(errChunks).toBe("");
+  });
+
+  it("debug() writes a prefixed line to stderr when verbose=true", () => {
+    const stderr = new PassThrough();
+    const stdout = new PassThrough();
+    const stdin = new PassThrough();
+    let errChunks = "";
+    stderr.on("data", (c: Buffer) => (errChunks += c.toString("utf8")));
+    const console = createDefaultConsole({ stdin, stdout, stderr, verbose: true });
+    console.debug("hello world");
+    expect(errChunks).toMatch(/^\[cdwt verbose \+\d+ms\] hello world\n$/);
+  });
+
+  it("TestConsole.debug() is a no-op by default", () => {
+    const tc = new TestConsole();
+    tc.debug("silent");
+    expect(tc.debugLines).toEqual([]);
+  });
+
+  it("TestConsole.debug() records lines when verbose=true", () => {
+    const tc = new TestConsole();
+    tc.verbose = true;
+    tc.debug("first");
+    tc.debug("second");
+    expect(tc.debugLines).toEqual(["first", "second"]);
+    // debug lines must NOT appear in stderr
+    expect(tc.stderr).toBe("");
+  });
+});
+
 describe("TestConsole", () => {
   it("buffers stdout and stderr separately", () => {
     const console = new TestConsole();

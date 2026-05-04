@@ -19,6 +19,11 @@ export interface RunOptions {
   inheritStdio?: boolean;
   /** Optional input to write on stdin. */
   input?: string;
+  /**
+   * When provided, called with a timing message after the child exits.
+   * Receives: command args, exit code, wall time, stdout/stderr byte counts.
+   */
+  onDebug?: (msg: string) => void;
 }
 
 /**
@@ -31,6 +36,7 @@ export function run(
   options: RunOptions = {},
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
+    const t0 = Date.now();
     const stdio: SpawnOptions["stdio"] = options.inheritStdio
       ? ["inherit", process.stderr, "inherit"]
       : ["pipe", "pipe", "pipe"];
@@ -42,7 +48,14 @@ export function run(
 
     if (options.inheritStdio) {
       child.on("error", reject);
-      child.on("close", (exitCode) => resolve({ stdout: "", stderr: "", exitCode: exitCode ?? 0 }));
+      child.on("close", (exitCode) => {
+        const code = exitCode ?? 0;
+        const elapsed = Date.now() - t0;
+        options.onDebug?.(
+          `exec [inherited] ${command} ${args.join(" ")} cwd=${options.cwd ?? "."} exit=${code} +${elapsed}ms`,
+        );
+        resolve({ stdout: "", stderr: "", exitCode: code });
+      });
       return;
     }
 
@@ -55,7 +68,14 @@ export function run(
       stderr += chunk.toString("utf8");
     });
     child.on("error", reject);
-    child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode: exitCode ?? 0 }));
+    child.on("close", (exitCode) => {
+      const code = exitCode ?? 0;
+      const elapsed = Date.now() - t0;
+      options.onDebug?.(
+        `exec ${command} ${args.join(" ")} cwd=${options.cwd ?? "."} exit=${code} stdout=${stdout.length}B stderr=${stderr.length}B +${elapsed}ms`,
+      );
+      resolve({ stdout, stderr, exitCode: code });
+    });
 
     if (options.input !== undefined) {
       child.stdin?.write(options.input);

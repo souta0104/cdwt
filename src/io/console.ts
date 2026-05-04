@@ -17,6 +17,12 @@ export interface ConsoleIO {
   /** Write to stderr followed by a newline. */
   errln(message?: string): void;
   /**
+   * Write a timestamped diagnostic line to stderr.
+   * No-op when verbose mode is disabled.
+   * Format: [cdwt verbose +NNNms] message
+   */
+  debug(message: string): void;
+  /**
    * Read one line from stdin, prompting on stderr.
    * Returns null on EOF or when stdin is not a TTY (so callers can fail
    * fast in non-interactive contexts instead of hanging forever).
@@ -34,19 +40,29 @@ export interface DefaultConsoleStreams {
   stdin?: Readable;
   stdout?: Writable;
   stderr?: Writable;
+  /** When true, debug() writes timestamped lines to stderr. */
+  verbose?: boolean;
 }
+
+const _startTime = Date.now();
 
 export function createDefaultConsole(streams: DefaultConsoleStreams = {}): ConsoleIO {
   const stdin = streams.stdin ?? process.stdin;
   const stdout = streams.stdout ?? process.stdout;
   const stderr = streams.stderr ?? process.stderr;
   const isInteractive = Boolean((stdin as { isTTY?: boolean }).isTTY);
+  const verbose = streams.verbose ?? false;
 
   const console: ConsoleIO = {
     out: (chunk) => stdout.write(chunk),
     outln: (message = "") => stdout.write(`${message}\n`),
     err: (chunk) => stderr.write(chunk),
     errln: (message = "") => stderr.write(`${message}\n`),
+    debug(message) {
+      if (!verbose) return;
+      const elapsed = Date.now() - _startTime;
+      stderr.write(`[cdwt verbose +${elapsed}ms] ${message}\n`);
+    },
     isInteractive,
     async ask(prompt) {
       if (!isInteractive) return null;

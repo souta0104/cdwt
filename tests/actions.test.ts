@@ -128,23 +128,47 @@ describe("deleteWorktreeAction", () => {
     );
   });
 
-  it("returns EXIT_CANCELLED when the user declines", async () => {
+  it("returns cancelled when the user declines the initial prompt", async () => {
     const target = path.join(workdir, "repo-feature-del");
     exec(repoDir, "git", ["worktree", "add", "-b", "feature-del", target]);
     const { ctx } = await makeContext({ responses: ["n"] });
-    const code = await deleteWorktreeAction(ctx, target);
-    expect(code).toBe(EXIT_CANCELLED);
+    const outcome = await deleteWorktreeAction(ctx, target);
+    expect(outcome).toEqual({ kind: "cancelled" });
     expect((await stat(target)).isDirectory()).toBe(true);
   });
 
-  it("removes the worktree on confirm and prints the main worktree path", async () => {
+  it("returns deleted on confirm and removes the worktree (clean)", async () => {
     const target = path.join(workdir, "repo-feature-del2");
     exec(repoDir, "git", ["worktree", "add", "-b", "feature-del2", target]);
     const { ctx, console } = await makeContext({ responses: ["y"] });
-    const code = await deleteWorktreeAction(ctx, target);
-    expect(code).toBe(0);
-    expect(console.stdout.trim()).toBe(repoDir);
+    const outcome = await deleteWorktreeAction(ctx, target);
+    expect(outcome).toEqual({ kind: "deleted" });
+    // deleteWorktreeAction no longer prints a destination; that's runSelect's job.
+    expect(console.stdout).toBe("");
     await expect(stat(target)).rejects.toThrow();
+  });
+
+  it("dirty worktree: first yes, second yes → force deletes and returns deleted", async () => {
+    const target = path.join(workdir, "repo-feature-dirty");
+    exec(repoDir, "git", ["worktree", "add", "-b", "feature-dirty", target]);
+    // Make the worktree dirty with an untracked file.
+    await writeFile(path.join(target, "dirty.txt"), "dirty\n");
+    // Respond "y" to initial delete prompt, "y" to force prompt.
+    const { ctx } = await makeContext({ responses: ["y", "y"] });
+    const outcome = await deleteWorktreeAction(ctx, target);
+    expect(outcome).toEqual({ kind: "deleted" });
+    await expect(stat(target)).rejects.toThrow();
+  });
+
+  it("dirty worktree: first yes, second no → returns cancelled, worktree still exists", async () => {
+    const target = path.join(workdir, "repo-feature-dirty2");
+    exec(repoDir, "git", ["worktree", "add", "-b", "feature-dirty2", target]);
+    await writeFile(path.join(target, "dirty.txt"), "dirty\n");
+    // "y" to initial delete, "n" to force prompt.
+    const { ctx } = await makeContext({ responses: ["y", "n"] });
+    const outcome = await deleteWorktreeAction(ctx, target);
+    expect(outcome).toEqual({ kind: "cancelled" });
+    expect((await stat(target)).isDirectory()).toBe(true);
   });
 });
 

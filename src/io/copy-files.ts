@@ -19,20 +19,66 @@ export interface CopyIgnoredOptions {
  */
 export async function copyConfiguredIgnoredPaths(options: CopyIgnoredOptions): Promise<void> {
   const { source, destination, config, console } = options;
+  const t0Total = Date.now();
+
+  console.debug(
+    `copyConfiguredIgnoredPaths start source=${source} destination=${destination} paths=[${config.copyIgnored.paths.join(",")}] patterns=[${config.copyIgnored.patterns.join(",")}]`,
+  );
+
+  let timeInIsIgnored = 0;
+  let timeInCp = 0;
+  let copiedCount = 0;
+  let skippedCount = 0;
 
   for (const relative of config.copyIgnored.paths) {
     validateCopyPath(relative);
-    await copyOneIgnoredPath(source, destination, relative, console);
+    await copyOneIgnoredPath(source, destination, relative, console, {
+      onTimeIgnored: (ms) => { timeInIsIgnored += ms; },
+      onTimeCp: (ms) => { timeInCp += ms; },
+      onCopied: () => { copiedCount++; },
+      onSkipped: () => { skippedCount++; },
+    });
   }
 
-  if (config.copyIgnored.patterns.length === 0) return;
+  if (config.copyIgnored.patterns.length === 0) {
+    console.debug(
+      `copyConfiguredIgnoredPaths done (no patterns) elapsed=${Date.now() - t0Total}ms copied=${copiedCount} skipped=${skippedCount}`,
+    );
+    return;
+  }
 
+  const t0Ls = Date.now();
   const ignored = await listIgnoredFiles(source);
+  const lsElapsed = Date.now() - t0Ls;
+  console.debug(`git ls-files returned ${ignored.length} entries in ${lsElapsed}ms`);
+
+  for (const pattern of config.copyIgnored.patterns) {
+    const matches = ignored.filter((f) => copyPatternMatchesPath(f, [pattern]));
+    console.debug(`pattern "${pattern}": ${matches.length} of ${ignored.length} entries matched`);
+  }
+
   for (const relative of ignored) {
     if (copyPatternMatchesPath(relative, config.copyIgnored.patterns)) {
-      await copyOneIgnoredPath(source, destination, relative, console);
+      await copyOneIgnoredPath(source, destination, relative, console, {
+        onTimeIgnored: (ms) => { timeInIsIgnored += ms; },
+        onTimeCp: (ms) => { timeInCp += ms; },
+        onCopied: () => { copiedCount++; },
+        onSkipped: () => { skippedCount++; },
+      });
     }
   }
+
+  const totalElapsed = Date.now() - t0Total;
+  console.debug(
+    `copyConfiguredIgnoredPaths done elapsed=${totalElapsed}ms copied=${copiedCount} skipped=${skippedCount} timeInIsIgnored=${timeInIsIgnored}ms timeInCp=${timeInCp}ms other=${totalElapsed - timeInIsIgnored - timeInCp}ms`,
+  );
+}
+
+interface CopyTimers {
+  onTimeIgnored: (ms: number) => void;
+  onTimeCp: (ms: number) => void;
+  onCopied: () => void;
+  onSkipped: () => void;
 }
 
 async function copyOneIgnoredPath(
@@ -40,19 +86,34 @@ async function copyOneIgnoredPath(
   destination: string,
   relative: string,
   console: ConsoleIO,
+  timers: CopyTimers,
 ): Promise<void> {
   validateCopyPath(relative);
   const sourceItem = path.join(source, relative);
   const destinationItem = path.join(destination, relative);
 
   const sourceStat = await safeStat(sourceItem);
-  if (!sourceStat) return;
+  if (!sourceStat) {
+    console.debug(`copy skip (not found): ${relative}`);
+    return;
+  }
 
+  const t0Ignored = Date.now();
   const ignored = await isGitIgnored(source, relative);
+  const ignoredElapsed = Date.now() - t0Ignored;
+  timers.onTimeIgnored(ignoredElapsed);
+
   if (!ignored) {
+    console.debug(`copy skip (not git-ignored, isGitIgnored took ${ignoredElapsed}ms): ${relative}`);
+    timers.onSkipped();
     console.errln(`cdwt: copy path is not ignored by git, skipping: ${relative}`);
     return;
   }
+
+  const sizeInfo = sourceStat.isDirectory() ? "dir" : `${sourceStat.size}B`;
+  console.debug(
+    `copy ${relative} (${sizeInfo}) isGitIgnored=${ignoredElapsed}ms`,
+  );
 
   // `cp` with recursive: true creates the destination root itself, so we
   // only need to ensure the *parent* directory exists for both file and
@@ -60,11 +121,17 @@ async function copyOneIgnoredPath(
   // verbatimSymlinks true (Node 22), which matches `cp -pR` closely enough
   // for our "carry .env / .claude across worktrees" use case.
   await mkdir(path.dirname(destinationItem), { recursive: true });
+
+  const t0Cp = Date.now();
   await cp(sourceItem, destinationItem, {
     recursive: sourceStat.isDirectory(),
     preserveTimestamps: true,
     force: true,
   });
+  const cpElapsed = Date.now() - t0Cp;
+  timers.onTimeCp(cpElapsed);
+  timers.onCopied();
+  console.debug(`copy done ${relative} cp=${cpElapsed}ms`);
 }
 
 async function safeStat(target: string) {

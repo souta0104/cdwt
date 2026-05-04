@@ -5,12 +5,16 @@ import { runInstall, defaultHome as installHome } from "./commands/install.js";
 import { runSelect, defaultHome as selectHome } from "./commands/select.js";
 import { createDefaultConsole, type ConsoleIO } from "./io/console.js";
 
-interface SelectFlags {
+interface GlobalFlags {
+  verbose?: boolean;
+}
+
+interface SelectFlags extends GlobalFlags {
   defaultBranch?: boolean;
   config?: string;
 }
 
-interface InstallFlags {
+interface InstallFlags extends GlobalFlags {
   rc?: string;
 }
 
@@ -19,7 +23,7 @@ interface InstallFlags {
  * so the entry point can call `process.exit` exactly once. Keeping that out
  * of `runSelect` / `runInstall` keeps them testable from unit tests.
  */
-export function buildProgram(console: ConsoleIO): {
+export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
   program: Command;
   state: { exitCode: number };
 } {
@@ -33,7 +37,8 @@ export function buildProgram(console: ConsoleIO): {
         "use the bundled zsh wrapper (installed via `cdwt-select install`) so the " +
         "shell can `cd` into it.",
     )
-    .version("0.1.0");
+    .version("0.1.0")
+    .option("-v, --verbose", "write timestamped diagnostic logs to stderr");
 
   program
     .option("--default-branch", "print the path of the default branch worktree and exit")
@@ -42,6 +47,8 @@ export function buildProgram(console: ConsoleIO): {
       "use only the given settings file (overrides .cdwt/settings.json discovery)",
     )
     .action(async (opts: SelectFlags) => {
+      const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
+      const console = consoleFactory(verbose);
       state.exitCode = await runSelect({
         defaultBranchOnly: Boolean(opts.defaultBranch),
         cwd: process.cwd(),
@@ -56,6 +63,8 @@ export function buildProgram(console: ConsoleIO): {
     .description("install the zsh shell wrapper to ~/.local/share/cdwt and update ~/.zshrc")
     .option("--rc <file>", "rc file to update (default: $HOME/.zshrc)")
     .action(async (opts: InstallFlags) => {
+      const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
+      const console = consoleFactory(verbose);
       state.exitCode = await runInstall({
         home: installHome(),
         rcFile: opts.rc,
@@ -67,17 +76,18 @@ export function buildProgram(console: ConsoleIO): {
 }
 
 async function main(): Promise<number> {
-  const console = createDefaultConsole();
-  const { program, state } = buildProgram(console);
+  const { program, state } = buildProgram((verbose) => createDefaultConsole({ verbose }));
+  // We need a console for error reporting before parsing; use non-verbose default.
+  const errorConsole = createDefaultConsole();
   try {
     await program.parseAsync(process.argv);
     return state.exitCode;
   } catch (error) {
     if (error instanceof CdwtError) {
-      console.errln(`${pc.red("cdwt:")} ${error.message}`);
+      errorConsole.errln(`${pc.red("cdwt:")} ${error.message}`);
       return error.code;
     }
-    console.errln(`${pc.red("cdwt:")} ${(error as Error).message}`);
+    errorConsole.errln(`${pc.red("cdwt:")} ${(error as Error).message}`);
     return 1;
   }
 }

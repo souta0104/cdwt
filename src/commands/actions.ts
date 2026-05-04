@@ -9,6 +9,7 @@ import {
   checkRefFormat,
   removeWorktree,
   removeWorktreeForce,
+  removeWorktreeForceRaw,
 } from "../io/git.js";
 import { checkoutPr } from "../io/gh.js";
 import type { ConsoleIO } from "../io/console.js";
@@ -25,21 +26,58 @@ export interface ActionContext {
   console: ConsoleIO;
 }
 
+export type DeleteOutcome = { kind: "deleted" } | { kind: "cancelled" };
+
 /** Print the destination path so the shell wrapper can `cd` into it. */
 export function printDestination(console: ConsoleIO, target: string): void {
   console.outln(target);
 }
 
-export async function deleteWorktreeAction(ctx: ActionContext, target: string): Promise<number> {
+export async function deleteWorktreeAction(
+  ctx: ActionContext,
+  target: string,
+): Promise<DeleteOutcome> {
   if (target === ctx.repo.mainWorktree) {
     throw new CdwtError("refusing to delete the default branch worktree");
   }
   if (!(await ctx.console.confirm(`Delete worktree at "${target}"? [y/N] `))) {
-    return EXIT_CANCELLED;
+    ctx.console.debug(`delete cancelled by user for ${target}`);
+    return { kind: "cancelled" };
   }
-  await removeWorktree(ctx.repo.mainWorktree, target);
-  printDestination(ctx.console, ctx.repo.mainWorktree);
-  return 0;
+
+  ctx.console.debug(`attempting git worktree remove for ${target}`);
+  const result = await removeWorktree(ctx.repo.mainWorktree, target);
+  ctx.console.debug(
+    `git worktree remove exit=${result.exitCode} stderr=${result.stderr.length}B`,
+  );
+
+  if (result.exitCode === 0) {
+    ctx.console.debug(`delete succeeded (clean) for ${target}`);
+    return { kind: "deleted" };
+  }
+
+  // Non-zero: show git's message and ask the user whether to force.
+  if (result.stderr) ctx.console.errln(result.stderr.trimEnd());
+  ctx.console.debug(`worktree is dirty, prompting for force delete`);
+
+  if (!(await ctx.console.confirm(`Worktree has uncommitted changes. Force delete? [y/N] `))) {
+    ctx.console.debug(`force delete cancelled by user for ${target}`);
+    return { kind: "cancelled" };
+  }
+
+  ctx.console.debug(`attempting force remove for ${target}`);
+  const force = await removeWorktreeForceRaw(ctx.repo.mainWorktree, target);
+  ctx.console.debug(`force remove exit=${force.exitCode} stderr=${force.stderr.length}B`);
+
+  if (force.exitCode !== 0) {
+    if (force.stderr) ctx.console.errln(force.stderr.trimEnd());
+    throw new CdwtError(
+      `git worktree remove --force failed for ${target} (exit ${force.exitCode})`,
+    );
+  }
+
+  ctx.console.debug(`force delete succeeded for ${target}`);
+  return { kind: "deleted" };
 }
 
 export async function createWorktreeForBranchAction(
