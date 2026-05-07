@@ -1,12 +1,6 @@
-export type SectionKey =
-  | "root"
-  | "worktree"
-  | "new worktree"
-  | "delete worktree"
-  | "github pr"
-  | "local branch";
+export type SectionKey = "main" | "wt" | "br" | "pr";
 
-export type DisplayKind = "worktree" | "delete" | "branch" | "new" | "pr";
+export type DisplayKind = "worktree" | "branch" | "pr";
 
 export interface Worktree {
   /** Absolute path of the worktree. */
@@ -39,13 +33,13 @@ export interface DisplayLine {
   name: string;
   /** Short, human friendly path. */
   shortPath: string;
-  /** Absolute destination path (empty for "new worktree"). */
+  /** Absolute destination path. */
   fullPath: string;
-  /** Final destination to print on selection (empty until resolved). */
+  /** Final destination to print on selection. */
   destination: string;
-  /** Branch the entry refers to (empty for root / new). */
+  /** Branch the entry refers to (empty for main). */
   branch: string;
-  /** PR number (only for github pr entries). */
+  /** PR number (only for pr entries). */
   prNumber: number | null;
 }
 

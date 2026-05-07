@@ -10,11 +10,11 @@ export interface BuildSectionsInput {
 }
 
 /**
- * Set of branches that are already checked out in a non-main worktree.
+ * Branches already checked out in a non-main worktree.
  *
- * Note: matches bash behaviour - the main worktree's branch is intentionally
- * NOT added here, so the local branch section still surfaces the default
- * branch (which lets the user e.g. `git worktree add` it elsewhere later).
+ * The main worktree's branch is intentionally NOT included so the local
+ * branch section still surfaces the default branch (lets the user create
+ * another worktree of it if they want).
  */
 export function deriveBranchesWithWorktree(repo: RepoContext): Set<string> {
   const set = new Set<string>();
@@ -27,10 +27,14 @@ export function deriveBranchesWithWorktree(repo: RepoContext): Set<string> {
 }
 
 /**
- * Build the ordered list of selectable entries shown across sections.
- * Order matches the bash version exactly:
- *   1. root, 2. new worktree, 3. worktree, 4. delete worktree,
- *   5. github pr, 6. local branch.
+ * Build the unified picker line list. Order:
+ *   1. main worktree
+ *   2. linked worktrees
+ *   3. PRs (if loaded)
+ *   4. local branches without a worktree
+ *
+ * Slash commands (`/new`, `/delete`) handle creation and deletion, so this
+ * list contains entities only - no synthetic action rows.
  */
 export function buildSections({
   repo,
@@ -42,43 +46,26 @@ export function buildSections({
   const branchesWithWorktree = deriveBranchesWithWorktree(repo);
   const prBranches = new Set<string>();
 
-  // 1. root
   const rootMarker = repo.mainWorktree === repo.currentPath ? " [current]" : "";
   lines.push(
     line({
       kind: "worktree",
-      section: "root",
+      section: "main",
       name: `${repo.repoName}${rootMarker}`,
       shortPath: ".",
       fullPath: repo.mainWorktree,
       destination: repo.mainWorktree,
-      branch: "",
+      branch: repo.mainWorktreeBranch ?? "",
     }),
   );
 
-  // 2. new worktree
-  if (repo.defaultBranchRef) {
-    lines.push(
-      line({
-        kind: "new",
-        section: "new worktree",
-        name: "create new worktree",
-        shortPath: `from ${repo.defaultBranchRef}`,
-        fullPath: "",
-        destination: "",
-        branch: "",
-      }),
-    );
-  }
-
-  // 3. existing worktrees (skip main)
   for (const wt of repo.worktrees) {
     if (wt.path === repo.mainWorktree) continue;
     const label = worktreeLabel(wt, repo.currentPath);
     lines.push(
       line({
         kind: "worktree",
-        section: "worktree",
+        section: "wt",
         name: label,
         shortPath: displayPath({
           path: wt.path,
@@ -93,30 +80,6 @@ export function buildSections({
     );
   }
 
-  // 4. delete worktree (skip main)
-  for (const wt of repo.worktrees) {
-    if (wt.path === repo.mainWorktree) continue;
-    const label = worktreeLabel(wt, repo.currentPath);
-    const shortPath = displayPath({
-      path: wt.path,
-      mainWorktree: repo.mainWorktree,
-      mainParent: repo.mainParent,
-      home,
-    });
-    lines.push(
-      line({
-        kind: "delete",
-        section: "delete worktree",
-        name: `delete ${label}`,
-        shortPath,
-        fullPath: wt.path,
-        destination: wt.path,
-        branch: wt.branch ?? "",
-      }),
-    );
-  }
-
-  // 5. github pr
   for (const pr of prs) {
     prBranches.add(pr.branch);
     const existingWorktreePath = findNonMainWorktreePathForBranch(
@@ -129,7 +92,7 @@ export function buildSections({
     lines.push(
       line({
         kind: "pr",
-        section: "github pr",
+        section: "pr",
         name: `#${pr.number} ${pr.title}`,
         shortPath: displayPath({
           path: targetPath,
@@ -145,7 +108,6 @@ export function buildSections({
     );
   }
 
-  // 6. local branches without worktree, not already shown as a PR head
   for (const branch of localBranches) {
     if (branchesWithWorktree.has(branch)) continue;
     if (prBranches.has(branch)) continue;
@@ -153,7 +115,7 @@ export function buildSections({
     lines.push(
       line({
         kind: "branch",
-        section: "local branch",
+        section: "br",
         name: branch,
         shortPath: displayPath({
           path: targetPath,
@@ -216,7 +178,7 @@ function worktreeLabel(wt: Worktree, currentPath: string): string {
 /**
  * Skip the main worktree on purpose: a PR whose head branch matches the
  * default branch should still create a fresh `repo-pr-<n>` directory rather
- * than try to overwrite the main worktree with a detached checkout.
+ * than overwrite the main worktree with a detached checkout.
  */
 function findNonMainWorktreePathForBranch(
   worktrees: readonly Worktree[],

@@ -61,30 +61,22 @@ describe("printDestination", () => {
 });
 
 describe("createWorktreeForBranchAction", () => {
-  it("creates the worktree on confirm and prints the destination", async () => {
+  it("creates the worktree without prompting and prints the destination", async () => {
     exec(repoDir, "git", ["branch", "feature"]);
-    const { ctx, console } = await makeContext({ responses: ["y"] });
+    const { ctx, console } = await makeContext();
     const target = path.join(workdir, "repo-feature");
     const code = await createWorktreeForBranchAction(ctx, "feature", target);
     expect(code).toBe(0);
     expect(console.stdout.trim()).toBe(target);
     expect((await stat(target)).isDirectory()).toBe(true);
-  });
-
-  it("returns EXIT_CANCELLED when the user declines and does not touch the FS", async () => {
-    exec(repoDir, "git", ["branch", "feature"]);
-    const { ctx } = await makeContext({ responses: ["n"] });
-    const target = path.join(workdir, "repo-feature-cancel");
-    const code = await createWorktreeForBranchAction(ctx, "feature", target);
-    expect(code).toBe(EXIT_CANCELLED);
-    await expect(stat(target)).rejects.toThrow();
+    expect(console.askedPrompts).toEqual([]);
   });
 
   it("throws when the destination already exists", async () => {
     exec(repoDir, "git", ["branch", "feature"]);
     const target = path.join(workdir, "repo-feature-exists");
     await mkdir(target, { recursive: true });
-    const { ctx } = await makeContext({ responses: ["y"] });
+    const { ctx } = await makeContext();
     await expect(createWorktreeForBranchAction(ctx, "feature", target)).rejects.toThrow(
       /destination already exists/,
     );
@@ -97,7 +89,7 @@ describe("createWorktreeForBranchAction", () => {
     exec(repoDir, "git", ["commit", "-q", "-m", "ignore env"]);
     await writeFile(path.join(repoDir, ".env"), "SECRET=1\n");
 
-    const { ctx, console } = await makeContext({ responses: ["y"] });
+    const { ctx, console } = await makeContext();
     ctx.config.copyIgnored.paths = [".env"];
     const target = path.join(workdir, "repo-feature-with-env");
     const code = await createWorktreeForBranchAction(ctx, "feature", target);
@@ -112,7 +104,7 @@ describe("createWorktreeForBranchAction", () => {
     exec(repoDir, "git", ["add", "tracked.txt"]);
     exec(repoDir, "git", ["commit", "-q", "-m", "tracked"]);
 
-    const { ctx, console } = await makeContext({ responses: ["y"] });
+    const { ctx, console } = await makeContext();
     ctx.config.copyIgnored.paths = ["tracked.txt"];
     const target = path.join(workdir, "repo-feature-tracked");
     await createWorktreeForBranchAction(ctx, "feature", target);
@@ -173,18 +165,26 @@ describe("deleteWorktreeAction", () => {
 });
 
 describe("createNewWorktreeAction", () => {
-  it("creates a new branch and worktree from the default branch", async () => {
-    const branchName = "fresh-branch";
+  it("creates a worktree directly when given a branch arg (no prompts)", async () => {
     const expectedTarget = path.join(workdir, "repo-fresh-branch");
-    const { ctx, console } = await makeContext({ responses: [branchName, "y"] });
-    const code = await createNewWorktreeAction(ctx);
+    const { ctx, console } = await makeContext();
+    const code = await createNewWorktreeAction(ctx, "fresh-branch");
     expect(code).toBe(0);
     expect(console.stdout.trim()).toBe(expectedTarget);
     expect((await stat(expectedTarget)).isDirectory()).toBe(true);
+    expect(console.askedPrompts).toEqual([]);
+  });
+
+  it("falls back to prompting when no branch arg is supplied", async () => {
+    const branchName = "interactive-branch";
+    const expectedTarget = path.join(workdir, "repo-interactive-branch");
+    const { ctx, console } = await makeContext({ responses: [branchName] });
+    const code = await createNewWorktreeAction(ctx);
+    expect(code).toBe(0);
+    expect(console.stdout.trim()).toBe(expectedTarget);
   });
 
   it("returns EXIT_CANCELLED when the branch prompt receives EOF", async () => {
-    // No queued responses → ask returns null on first call.
     const { ctx } = await makeContext();
     const code = await createNewWorktreeAction(ctx);
     expect(code).toBe(EXIT_CANCELLED);
@@ -200,10 +200,10 @@ describe("createNewWorktreeAction", () => {
     expect(console.stderr).toContain("too many invalid branch name attempts");
   });
 
-  it("rejects a branch that already exists", async () => {
+  it("rejects a branch arg that already exists", async () => {
     exec(repoDir, "git", ["branch", "exists"]);
-    const { ctx, console } = await makeContext({ responses: ["exists", ""] });
-    const code = await createNewWorktreeAction(ctx);
+    const { ctx, console } = await makeContext();
+    const code = await createNewWorktreeAction(ctx, "exists");
     expect(code).toBe(EXIT_CANCELLED);
     expect(console.stderr).toContain("branch already exists: exists");
   });

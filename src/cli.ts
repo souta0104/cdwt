@@ -11,6 +11,7 @@ interface GlobalFlags {
 
 interface SelectFlags extends GlobalFlags {
   defaultBranch?: boolean;
+  pr?: boolean;
   config?: string;
 }
 
@@ -42,6 +43,7 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
 
   program
     .option("--default-branch", "print the path of the default branch worktree and exit")
+    .option("--pr", "open the picker pre-filtered to PRs (loads `gh pr list` immediately)")
     .option(
       "--config <file>",
       "use only the given settings file (overrides .cdwt/settings.json discovery)",
@@ -51,6 +53,7 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
       const console = consoleFactory(verbose);
       state.exitCode = await runSelect({
         defaultBranchOnly: Boolean(opts.defaultBranch),
+        prFilter: Boolean(opts.pr),
         cwd: process.cwd(),
         configOverride: opts.config ?? process.env["CDWT_CONFIG"],
         home: selectHome(),

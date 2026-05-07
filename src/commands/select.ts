@@ -6,7 +6,12 @@ import type { ConsoleIO } from "../io/console.js";
 import { isGhAvailable, listPullRequests } from "../io/gh.js";
 import { listLocalBranches, setGitDebug } from "../io/git.js";
 import { loadRepoContext } from "../io/repo-context.js";
-import { selectInteractive, type SelectorOptions } from "../ui/selector.js";
+import {
+  selectInteractive,
+  type SelectorOptions,
+  type SlashCommand,
+} from "../ui/selector.js";
+import type { DisplayLine, PullRequest, RepoContext } from "../types.js";
 import {
   EXIT_CANCELLED,
   createNewWorktreeAction,
@@ -19,6 +24,8 @@ import {
 
 export interface SelectOptions {
   defaultBranchOnly: boolean;
+  /** Start with the PR filter enabled and PR list pre-fetched. */
+  prFilter?: boolean;
   cwd: string;
   configOverride: string | undefined;
   home: string;
@@ -30,9 +37,16 @@ export interface SelectOptions {
   selectorOptions?: Omit<SelectorOptions, "console">;
 }
 
+interface State {
+  repo: RepoContext;
+  prs: PullRequest[];
+  prsLoaded: boolean;
+  localBranches: string[];
+  lines: DisplayLine[];
+}
+
 export async function runSelect(options: SelectOptions): Promise<number> {
   const { console } = options;
-  // Wire the git debug hook so every git invocation logs timing to stderr.
   setGitDebug((msg) => console.debug(msg));
   console.debug(`runSelect start cwd=${options.cwd}`);
 
@@ -59,104 +73,69 @@ export async function runSelect(options: SelectOptions): Promise<number> {
     `merged config: patterns=[${config.copyIgnored.patterns.join(",")}] paths=[${config.copyIgnored.paths.join(",")}]`,
   );
 
-  const t0GhCheck = Date.now();
-  const ghAvailable = await isGhAvailable();
-  console.debug(`gh available=${ghAvailable} (check took ${Date.now() - t0GhCheck}ms)`);
+  const localBranches = await listLocalBranches(repo.cwd);
+  console.debug(`localBranches=${localBranches.length}`);
 
-  const t0Listing = Date.now();
-  const [prs, localBranches] = await Promise.all([
-    ghAvailable ? listPullRequests(repo.cwd) : Promise.resolve([]),
-    listLocalBranches(repo.cwd),
-  ]);
-  console.debug(
-    `listing: prs=${prs.length} localBranches=${localBranches.length} (took ${Date.now() - t0Listing}ms)`,
-  );
+  let prs: PullRequest[] = [];
+  let prsLoaded = false;
+  if (options.prFilter) {
+    prs = await loadPrs(options.cwd, console);
+    prsLoaded = true;
+  }
 
-  const lines = buildSections({
+  const state: State = {
     repo,
     prs,
+    prsLoaded,
     localBranches,
-    home: options.home,
-  });
-  console.debug(`sections built: totalLines=${lines.length}`);
+    lines: buildSections({ repo, prs, localBranches, home: options.home }),
+  };
 
-  if (lines.length === 0) {
+  if (state.lines.length === 0) {
     throw new CdwtError("no worktree or branch candidates found");
   }
 
-  // Main action loop. We re-enter only when a delete action succeeds, so the
-  // user can chain multiple deletions without relaunching the CLI.
-  let inDeleteLoop = false;
+  let initialFilter: SelectorOptions["initialFilter"] = options.prFilter ? "pr" : undefined;
 
   while (true) {
-    // Refresh repo state on re-entry so deleted worktrees are gone from the list.
-    const currentRepo = inDeleteLoop ? await loadRepoContext(options.cwd) : repo;
-    const currentLines = inDeleteLoop
-      ? buildSections({
-          repo: currentRepo,
-          prs,
-          localBranches,
-          home: options.home,
-        })
-      : lines;
+    const ctx: ActionContext = {
+      repo: state.repo,
+      config,
+      branchesWithWorktree: deriveBranchesWithWorktree(state.repo),
+      console,
+    };
 
-    if (inDeleteLoop) {
-      console.debug(
-        `delete loop re-entry: worktrees=${currentRepo.worktrees.length} lines=${currentLines.length}`,
-      );
-      // If no deletable worktrees remain (only main), exit cleanly.
-      const deletable = currentLines.filter((l) => l.kind === "delete");
-      if (deletable.length === 0) {
-        console.debug(`no more deletable worktrees; exiting delete loop`);
-        printDestination(console, currentRepo.mainWorktree);
-        return 0;
-      }
-    }
+    const outcome = await selectInteractive(state.lines, {
+      console,
+      ...(initialFilter ? { initialFilter } : {}),
+      ...options.selectorOptions,
+    });
+    initialFilter = undefined;
 
-    const selected = await selectInteractive(currentLines, { console, ...options.selectorOptions });
-    if (!selected) {
-      if (inDeleteLoop) {
-        // User escaped from the picker after deleting some worktrees.
-        printDestination(console, currentRepo.mainWorktree);
-        return 0;
-      }
+    if (outcome.kind === "cancelled") {
       return EXIT_CANCELLED;
     }
 
+    if (outcome.kind === "slash") {
+      const code = await dispatchSlash(state, ctx, options, outcome.command);
+      if (code === undefined) continue;
+      return code;
+    }
+
+    const selected = outcome.line;
     console.debug(
       `selected: kind=${selected.kind} branch="${selected.branch}" destination="${selected.destination}"`,
     );
-
-    const currentBranchesWithWorktree = deriveBranchesWithWorktree(currentRepo);
-    const ctx: ActionContext = {
-      repo: currentRepo,
-      config,
-      branchesWithWorktree: currentBranchesWithWorktree,
-      console,
-    };
 
     switch (selected.kind) {
       case "worktree":
         printDestination(console, selected.destination);
         return 0;
-      case "delete": {
-        const outcome = await deleteWorktreeAction(ctx, selected.destination);
-        if (outcome.kind === "cancelled") {
-          // User cancelled — go back to main worktree.
-          printDestination(console, currentRepo.mainWorktree);
-          return 0;
-        }
-        // Deleted — loop back to show delete picker again.
-        inDeleteLoop = true;
-        continue;
-      }
       case "branch":
         return createWorktreeForBranchAction(ctx, selected.branch, selected.destination);
-      case "new":
-        return createNewWorktreeAction(ctx);
       case "pr": {
         if (selected.prNumber === null) throw new CdwtError("missing PR number");
-        if (currentBranchesWithWorktree.has(selected.branch)) {
+        if (ctx.branchesWithWorktree.has(selected.branch)) {
           printDestination(console, selected.destination);
           return 0;
         }
@@ -165,6 +144,113 @@ export async function runSelect(options: SelectOptions): Promise<number> {
     }
   }
 }
+
+/**
+ * Run a slash command. Returns an exit code to terminate the session, or
+ * `undefined` to keep looping (e.g. after a refresh or delete-mode entry).
+ */
+async function dispatchSlash(
+  state: State,
+  ctx: ActionContext,
+  options: SelectOptions,
+  command: SlashCommand,
+): Promise<number | undefined> {
+  const { console } = options;
+  switch (command.kind) {
+    case "main":
+      printDestination(console, state.repo.mainWorktree);
+      return 0;
+    case "new":
+      return createNewWorktreeAction(ctx, command.branch);
+    case "delete":
+      return await runDeleteMode(state, ctx, options);
+    case "pr": {
+      if (!state.prsLoaded) {
+        state.prs = await loadPrs(options.cwd, console);
+        state.prsLoaded = true;
+        rebuildLines(state, options.home);
+      }
+      return undefined;
+    }
+    case "refresh":
+      await refresh(state, options);
+      return undefined;
+    case "help":
+      console.errln(HELP_TEXT);
+      return undefined;
+  }
+}
+
+async function runDeleteMode(
+  state: State,
+  ctx: ActionContext,
+  options: SelectOptions,
+): Promise<number | undefined> {
+  while (true) {
+    if (state.lines.filter((l) => l.section === "wt").length === 0) {
+      printDestination(options.console, state.repo.mainWorktree);
+      return 0;
+    }
+    const outcome = await selectInteractive(state.lines, {
+      console: options.console,
+      initialFilter: "wt",
+      prompt: "delete> ",
+      footer: "↵ delete   esc cancel",
+      ...options.selectorOptions,
+    });
+    if (outcome.kind === "cancelled") return undefined;
+    if (outcome.kind === "slash") {
+      // nested slash: bubble up to main loop
+      return undefined;
+    }
+    const target = outcome.line;
+    if (target.section === "main") {
+      options.console.errln("cdwt: refusing to delete the default branch worktree");
+      continue;
+    }
+    if (target.section !== "wt") continue;
+    const result = await deleteWorktreeAction(ctx, target.destination);
+    if (result.kind === "cancelled") return undefined;
+    await refresh(state, options);
+    if (state.lines.filter((l) => l.section === "wt").length === 0) {
+      printDestination(options.console, state.repo.mainWorktree);
+      return 0;
+    }
+  }
+}
+
+async function refresh(state: State, options: SelectOptions): Promise<void> {
+  state.repo = await loadRepoContext(options.cwd);
+  state.localBranches = await listLocalBranches(state.repo.cwd);
+  if (state.prsLoaded) {
+    state.prs = await loadPrs(options.cwd, options.console);
+  }
+  rebuildLines(state, options.home);
+}
+
+function rebuildLines(state: State, home: string): void {
+  state.lines = buildSections({
+    repo: state.repo,
+    prs: state.prs,
+    localBranches: state.localBranches,
+    home,
+  });
+}
+
+async function loadPrs(cwd: string, console: ConsoleIO): Promise<PullRequest[]> {
+  const t0 = Date.now();
+  const ghAvailable = await isGhAvailable();
+  console.debug(`gh available=${ghAvailable}`);
+  if (!ghAvailable) return [];
+  const prs = await listPullRequests(cwd);
+  console.debug(`listed ${prs.length} PRs in ${Date.now() - t0}ms`);
+  return prs;
+}
+
+const HELP_TEXT = [
+  "shortcuts: enter=go  esc=cancel  tab=cycle filter  ?=help",
+  "slash: /new <branch>  /delete  /main  /pr  /refresh  /help",
+].join("\n");
 
 export function defaultHome(): string {
   return process.env["HOME"] ?? homedir();

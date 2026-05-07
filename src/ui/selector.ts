@@ -1,301 +1,285 @@
 import type { ConsoleIO } from "../io/console.js";
 import type { DisplayLine, SectionKey } from "../types.js";
 import { isFzfAvailable, runFzf as runFzfDefault, type FzfOptions, type FzfResult } from "./fzf.js";
-import { FIELD_SEP, renderLine, renderSearchLine, sectionLabel } from "./format.js";
-import {
-  buildRenderLookup,
-  parseItemPickerOutput,
-  parseSearchPickerOutput,
-  parseSectionPickerOutput,
-} from "./fzf-parse.js";
+import { FIELD_SEP, renderLine } from "./format.js";
 
 export type FzfRunner = (options: FzfOptions) => Promise<FzfResult>;
 
-const SECTION_ORDER: readonly SectionKey[] = [
-  "root",
-  "worktree",
-  "new worktree",
-  "delete worktree",
-  "github pr",
-  "local branch",
+const FILTER_ORDER: readonly Filter[] = ["all", "wt", "br", "pr"];
+type Filter = "all" | "wt" | "br" | "pr";
+
+const FOOTER = "↵ go   esc cancel   tab filter   / commands   ? help";
+
+const HELP_BODY = [
+  "shortcuts",
+  "  enter            go to highlighted entry",
+  "  esc              cancel",
+  "  tab / shift-tab  cycle filter (all / wt / br / pr)",
+  "  /                slash commands",
+  "  ?                this help",
+  "",
+  "slash commands",
+  "  /new <branch>    create worktree from default branch and jump",
+  "  /delete          enter delete mode (pick a worktree to remove)",
+  "  /main            jump to the main worktree",
+  "  /pr              load and filter pull requests",
+  "  /refresh         reload worktrees / branches / PRs",
+  "  /help            show this help",
 ];
 
-interface SectionSummary {
-  key: SectionKey;
-  label: string;
-  lines: DisplayLine[];
-}
+export type SlashCommand =
+  | { kind: "main" }
+  | { kind: "delete" }
+  | { kind: "pr" }
+  | { kind: "refresh" }
+  | { kind: "help" }
+  | { kind: "new"; branch: string };
+
+export type SelectOutcome =
+  | { kind: "selected"; line: DisplayLine }
+  | { kind: "slash"; command: SlashCommand }
+  | { kind: "cancelled" };
 
 export interface SelectorOptions {
   console: ConsoleIO;
   /**
-   * Override the fzf detection. `true` forces fzf, `false` forces the
-   * numbered prompt. Omit (or `undefined`) for auto-detect via PATH lookup.
+   * Override fzf detection. `true` forces fzf, `false` forces the numbered
+   * fallback. Omit for auto-detect via PATH lookup.
    */
   useFzf?: boolean;
   /** Inject a custom runner for fzf. Defaults to spawning the real binary. */
   fzfRunner?: FzfRunner;
+  /** Initial filter (used by `/pr` etc.). */
+  initialFilter?: Filter;
+  /** Prompt label override (e.g. "delete> "). */
+  prompt?: string;
+  /** Footer override. */
+  footer?: string;
 }
 
 export async function selectInteractive(
   allLines: readonly DisplayLine[],
   options: SelectorOptions,
-): Promise<DisplayLine | null> {
-  const sections = summariseSections(allLines);
-  if (sections.length === 0) return null;
+): Promise<SelectOutcome> {
+  if (allLines.length === 0) return { kind: "cancelled" };
 
   const useFzf = options.useFzf ?? (await isFzfAvailable());
-  const totalLines = allLines.length;
-  const sectionSummary = sections.map((s) => `${s.key}(${s.lines.length})`).join(", ");
   options.console.debug(
-    `selector mode=${useFzf ? "fzf" : "prompt"} sections=${sections.length} totalLines=${totalLines} [${sectionSummary}]`,
+    `selector mode=${useFzf ? "fzf" : "prompt"} totalLines=${allLines.length} initialFilter=${options.initialFilter ?? "all"}`,
   );
 
   if (useFzf) {
-    return selectWithFzf(allLines, sections, options.fzfRunner ?? runFzfDefault);
+    return selectWithFzf(allLines, options);
   }
-  return selectWithPrompt(sections, options.console);
-}
-
-function summariseSections(lines: readonly DisplayLine[]): SectionSummary[] {
-  const grouped = new Map<SectionKey, DisplayLine[]>();
-  for (const line of lines) {
-    const bucket = grouped.get(line.section);
-    if (bucket) bucket.push(line);
-    else grouped.set(line.section, [line]);
-  }
-  const summaries: SectionSummary[] = [];
-  for (const key of SECTION_ORDER) {
-    const list = grouped.get(key);
-    if (!list || list.length === 0) continue;
-    summaries.push({ key, label: sectionLabel(key, list.length), lines: list });
-  }
-  return summaries;
+  return selectWithPrompt(allLines, options);
 }
 
 async function selectWithFzf(
   allLines: readonly DisplayLine[],
-  sections: SectionSummary[],
-  runFzf: FzfRunner,
-): Promise<DisplayLine | null> {
-  let sectionIndex: number | null = null;
-  let pendingSearchQuery: string | null = null;
-  const lookup = buildRenderLookup(allLines);
+  options: SelectorOptions,
+): Promise<SelectOutcome> {
+  const runFzf = options.fzfRunner ?? runFzfDefault;
+  let filter: Filter = options.initialFilter ?? "all";
+  const prompt = options.prompt ?? "> ";
+  const footer = options.footer ?? FOOTER;
 
   while (true) {
-    if (pendingSearchQuery !== null) {
-      const outcome = await runSearchPicker(allLines, pendingSearchQuery, runFzf);
-      if (outcome.cancelled) return null;
-      if (outcome.resetToSections) {
-        pendingSearchQuery = null;
-        sectionIndex = null;
-        continue;
-      }
-      const line = outcome.innerKey ? lookup.get(outcome.innerKey) : null;
-      return line ?? null;
+    const visible = applyFilter(allLines, filter);
+    if (visible.length === 0) {
+      filter = "all";
+      continue;
+    }
+    const inputLines = visible.map((line) => renderLine(line));
+    const lookup = new Map(visible.map((line) => [renderLine(line), line]));
+    const header = filter === "all" ? "" : `filter: ${filter}`;
+    const result = await runFzf({
+      args: [
+        `--prompt=${prompt}`,
+        "--print-query",
+        `--delimiter=${FIELD_SEP}`,
+        "--nth=1",
+        "--expect=tab,btab,?",
+        "--height=70%",
+        "--reverse",
+        "--layout=reverse",
+        "--info=inline-right",
+        "--header-first",
+        `--header=${header}`,
+        `--footer=${footer}`,
+        "--preview",
+        'if [ -n "{3}" ]; then printf "%s\\n" {3}; fi',
+        "--preview-window=down:3:wrap",
+      ],
+      input: inputLines.join("\n"),
+    });
+    const outcome = parsePickerOutput(result.stdout, result.exitCode);
+    if (outcome.cancelled) return { kind: "cancelled" };
+
+    if (outcome.query.startsWith("/")) {
+      const cmd = parseSlashCommand(outcome.query);
+      if (cmd) return { kind: "slash", command: cmd };
+      // Unknown slash command - reopen with the same query so the user sees it.
+      continue;
     }
 
-    if (sectionIndex === null) {
-      if (sections.length === 1) {
-        sectionIndex = 0;
-      } else {
-        const choice = await runSectionPicker(sections, runFzf);
-        if (choice.cancelled) return null;
-        if (choice.searchQuery !== null) {
-          pendingSearchQuery = choice.searchQuery;
-          continue;
-        }
-        sectionIndex = choice.index;
-      }
+    if (outcome.key === "tab") {
+      filter = nextFilter(filter, +1);
+      continue;
+    }
+    if (outcome.key === "btab") {
+      filter = nextFilter(filter, -1);
+      continue;
+    }
+    if (outcome.key === "?") {
+      await runHelpOverlay(runFzf);
+      continue;
     }
 
-    const summary = sections[sectionIndex]!;
-    const itemLookup = buildRenderLookup(summary.lines);
-    const outcome = await runItemPicker(summary, runFzf);
-    if (outcome.cancelled) return null;
-    if (outcome.action === "esc") {
-      sectionIndex = null;
-      continue;
+    if (outcome.selected) {
+      const line = lookup.get(outcome.selected);
+      if (line) return { kind: "selected", line };
     }
-    if (outcome.action === "next") {
-      sectionIndex = (sectionIndex + 1) % sections.length;
-      continue;
-    }
-    if (outcome.action === "prev") {
-      sectionIndex = (sectionIndex - 1 + sections.length) % sections.length;
-      continue;
-    }
-    const line = outcome.selectedRendered ? itemLookup.get(outcome.selectedRendered) : null;
-    return line ?? null;
+    return { kind: "cancelled" };
   }
 }
 
-async function runSectionPicker(sections: SectionSummary[], runFzf: FzfRunner) {
-  const input = sections.map((s) => s.label).join("\n");
-  const result = await runFzf({
-    args: [
-      "--prompt=section> ",
-      "--print-query",
-      "--expect=esc",
-      "--bind=change:accept",
-      "--height=~20%",
-      "--reverse",
-      "--border",
-      "--layout=reverse",
-      "--info=inline-right",
-      "--border-label= sections ",
-      "--header=root / worktree / new worktree / delete worktree / github pr / local branch",
-    ],
-    input,
-  });
-  return parseSectionPickerOutput(
-    result.stdout,
-    result.exitCode,
-    sections.map((s) => s.label),
-  );
+interface PickerOutput {
+  cancelled: boolean;
+  query: string;
+  key: string;
+  selected: string;
 }
 
-async function runItemPicker(summary: SectionSummary, runFzf: FzfRunner) {
-  const inputLines = summary.lines.map((line) => renderLine(line));
-  const { header, borderLabel, listHeight } = sectionPresentation(summary.key);
-  const result = await runFzf({
-    args: [
-      "--prompt=cdwt> ",
-      `--delimiter=${FIELD_SEP}`,
-      "--nth=1",
-      "--expect=esc,tab,btab",
-      `--height=${listHeight}`,
-      "--reverse",
-      "--border",
-      "--layout=reverse",
-      "--info=inline-right",
-      `--border-label=${borderLabel}`,
-      "--preview-label= location ",
-      "--preview-label-pos=2",
-      `--header=${header}`,
-      "--footer=esc: sections  tab: next  shift-tab: prev",
-      "--preview",
-      'if [ -n "{3}" ]; then printf "location: %s\\n" {3}; fi',
-      "--preview-window=down:3:wrap",
-    ],
-    input: inputLines.join("\n"),
-  });
-  return parseItemPickerOutput(result.stdout, result.exitCode);
+function parsePickerOutput(stdout: string, exitCode: number): PickerOutput {
+  if (exitCode !== 0 && stdout === "") {
+    return { cancelled: true, query: "", key: "", selected: "" };
+  }
+  const lines = stdout.replace(/\n$/, "").split("\n");
+  return {
+    cancelled: false,
+    query: lines[0] ?? "",
+    key: lines[1] ?? "",
+    selected: lines[2] ?? "",
+  };
 }
 
-async function runSearchPicker(
-  allLines: readonly DisplayLine[],
-  initialQuery: string,
-  runFzf: FzfRunner,
-) {
-  const inputLines = allLines.map((line) => renderSearchLine(line));
-  const result = await runFzf({
+function applyFilter(lines: readonly DisplayLine[], filter: Filter): DisplayLine[] {
+  if (filter === "all") return [...lines];
+  return lines.filter((l) => sectionMatches(l.section, filter));
+}
+
+function sectionMatches(section: SectionKey, filter: Filter): boolean {
+  return section === filter;
+}
+
+function nextFilter(current: Filter, step: number): Filter {
+  const idx = FILTER_ORDER.indexOf(current);
+  const next = (idx + step + FILTER_ORDER.length) % FILTER_ORDER.length;
+  return FILTER_ORDER[next]!;
+}
+
+export function parseSlashCommand(raw: string): SlashCommand | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("/")) return null;
+  const [head, ...rest] = trimmed.slice(1).split(/\s+/);
+  const arg = rest.join(" ").trim();
+  switch (head) {
+    case "main":
+    case "home":
+      return { kind: "main" };
+    case "delete":
+    case "d":
+    case "rm":
+      return { kind: "delete" };
+    case "pr":
+      return { kind: "pr" };
+    case "refresh":
+    case "reload":
+    case "r":
+      return { kind: "refresh" };
+    case "help":
+    case "h":
+    case "?":
+      return { kind: "help" };
+    case "new":
+    case "n":
+      if (arg === "") return { kind: "help" };
+      return { kind: "new", branch: arg };
+    default:
+      return null;
+  }
+}
+
+async function runHelpOverlay(runFzf: FzfRunner): Promise<void> {
+  await runFzf({
     args: [
-      `--query=${initialQuery}`,
-      "--print-query",
-      "--prompt=search> ",
-      `--delimiter=${FIELD_SEP}`,
-      "--with-nth=1",
-      "--nth=1",
-      "--expect=esc",
+      "--prompt=help> ",
       "--height=70%",
       "--reverse",
-      "--border",
       "--layout=reverse",
-      "--info=inline-right",
-      "--border-label= search ",
-      "--preview-label= location ",
-      "--preview-label-pos=2",
-      "--header=all sections",
-      "--footer=esc: sections",
-      "--preview",
-      'if [ -n "{3}" ]; then printf "location: %s\\n" {3}; fi',
-      "--preview-window=down:4:wrap",
+      "--info=hidden",
+      "--header-first",
+      "--header=press esc to close",
+      "--no-sort",
+      "--disabled",
     ],
-    input: inputLines.join("\n"),
+    input: HELP_BODY.join("\n"),
   });
-  return parseSearchPickerOutput(result.stdout, result.exitCode);
-}
-
-interface SectionPresentation {
-  header: string;
-  borderLabel: string;
-  listHeight: string;
-}
-
-function sectionPresentation(key: SectionKey): SectionPresentation {
-  switch (key) {
-    case "root":
-      return { header: "main repository", borderLabel: " root ", listHeight: "~20%" };
-    case "worktree":
-      return { header: "existing worktrees", borderLabel: " worktree ", listHeight: "60%" };
-    case "new worktree":
-      return {
-        header: "create a branch and worktree from the default branch",
-        borderLabel: " new worktree ",
-        listHeight: "~20%",
-      };
-    case "delete worktree":
-      return {
-        header: "delete an existing worktree",
-        borderLabel: " delete worktree ",
-        listHeight: "60%",
-      };
-    case "github pr":
-      return { header: "open pull requests", borderLabel: " github pr ", listHeight: "60%" };
-    case "local branch":
-      return {
-        header: "local branches without worktree",
-        borderLabel: " local branch ",
-        listHeight: "60%",
-      };
-  }
 }
 
 const MAX_PROMPT_RETRIES = 5;
 
 async function selectWithPrompt(
-  sections: SectionSummary[],
-  console: ConsoleIO,
-): Promise<DisplayLine | null> {
-  // Skip the section step entirely when there's only one section, mirroring
-  // the fzf path. The user otherwise has to type "1" with no useful choice.
-  let chosen: SectionSummary | null = sections.length === 1 ? sections[0]! : null;
-
-  for (let attempt = 0; chosen === null && attempt < MAX_PROMPT_RETRIES; attempt++) {
-    console.errln("Sections:");
-    sections.forEach((s, idx) => console.errln(`${String(idx + 1).padStart(2)}) ${s.label}`));
-    const answer = await console.ask("Select a section: ");
-    if (answer === null) return null;
-    const trimmed = answer.trim();
-    const n = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(n) || n < 1 || n > sections.length) {
-      console.errln("cdwt: invalid selection");
-      continue;
-    }
-    chosen = sections[n - 1]!;
-  }
-  if (chosen === null) {
-    console.errln("cdwt: too many invalid section attempts; aborting");
-    return null;
-  }
+  allLines: readonly DisplayLine[],
+  options: SelectorOptions,
+): Promise<SelectOutcome> {
+  const console = options.console;
+  let filter: Filter = options.initialFilter ?? "all";
 
   for (let attempt = 0; attempt < MAX_PROMPT_RETRIES; attempt++) {
+    const visible = applyFilter(allLines, filter);
+    if (visible.length === 0) {
+      filter = "all";
+      continue;
+    }
     console.errln("");
-    console.errln(chosen.key);
-    chosen.lines.forEach((line, idx) =>
-      console.errln(`${String(idx + 1).padStart(2)}) ${line.name}`),
+    if (filter !== "all") console.errln(`(filter: ${filter})`);
+    visible.forEach((line, idx) =>
+      console.errln(
+        `${String(idx + 1).padStart(2)}) ${renderLine(line).split(FIELD_SEP)[0] ?? line.name}`,
+      ),
     );
-    const answer = await console.ask("Select a destination: ");
-    if (answer === null) return null;
+    console.errln(
+      "type number to go, /new <branch>, /delete, /main, /pr, /refresh, /help, blank to cancel",
+    );
+    const answer = await console.ask("> ");
+    if (answer === null) return { kind: "cancelled" };
     const trimmed = answer.trim();
+    if (trimmed === "") return { kind: "cancelled" };
+
+    if (trimmed.startsWith("/")) {
+      const cmd = parseSlashCommand(trimmed);
+      if (cmd) return { kind: "slash", command: cmd };
+      console.errln(`cdwt: unknown command: ${trimmed}`);
+      continue;
+    }
+
+    if (trimmed === "tab") {
+      filter = nextFilter(filter, +1);
+      continue;
+    }
+    if (trimmed === "?") {
+      console.errln(HELP_BODY.join("\n"));
+      continue;
+    }
+
     const n = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(n) || n < 1 || n > chosen.lines.length) {
+    if (!Number.isFinite(n) || n < 1 || n > visible.length) {
       console.errln("cdwt: invalid selection");
       continue;
     }
-    return chosen.lines[n - 1]!;
+    return { kind: "selected", line: visible[n - 1]! };
   }
-  console.errln("cdwt: too many invalid destination attempts; aborting");
-  return null;
+  console.errln("cdwt: too many invalid attempts; aborting");
+  return { kind: "cancelled" };
 }

@@ -25,7 +25,7 @@ function makeRepo(overrides: Partial<RepoContext> = {}): RepoContext {
 }
 
 describe("buildSections", () => {
-  it("emits sections in the documented order", () => {
+  it("emits sections in order: main → wt → pr → br", () => {
     const lines = buildSections({
       repo: makeRepo(),
       prs: [{ number: 7, branch: "pr-branch", title: "Add cool thing" }],
@@ -34,30 +34,26 @@ describe("buildSections", () => {
     });
     const sections = lines.map((l) => l.section);
     const indices = {
-      root: sections.indexOf("root"),
-      newWorktree: sections.indexOf("new worktree"),
-      worktree: sections.indexOf("worktree"),
-      delete: sections.indexOf("delete worktree"),
-      pr: sections.indexOf("github pr"),
-      branch: sections.indexOf("local branch"),
+      main: sections.indexOf("main"),
+      wt: sections.indexOf("wt"),
+      pr: sections.indexOf("pr"),
+      br: sections.indexOf("br"),
     };
-    expect(indices.root).toBeLessThan(indices.newWorktree);
-    expect(indices.newWorktree).toBeLessThan(indices.worktree);
-    expect(indices.worktree).toBeLessThan(indices.delete);
-    expect(indices.delete).toBeLessThan(indices.pr);
-    expect(indices.pr).toBeLessThan(indices.branch);
+    expect(indices.main).toBeLessThan(indices.wt);
+    expect(indices.wt).toBeLessThan(indices.pr);
+    expect(indices.pr).toBeLessThan(indices.br);
   });
 
-  it("marks the root entry with [current] when invoked from the main worktree", () => {
+  it("marks the main entry with [current] when invoked from the main worktree", () => {
     const lines = buildSections({
       repo: makeRepo(),
       prs: [],
       localBranches: [],
       home: HOME,
     });
-    const root = lines.find((l) => l.section === "root");
-    expect(root?.name).toBe("repo [current]");
-    expect(root?.shortPath).toBe(".");
+    const main = lines.find((l) => l.section === "main");
+    expect(main?.name).toBe("repo [current]");
+    expect(main?.shortPath).toBe(".");
   });
 
   it("uses 'detached@<short-sha>' label for detached worktrees", () => {
@@ -68,31 +64,31 @@ describe("buildSections", () => {
       home: HOME,
     });
     const detached = lines
-      .filter((l) => l.section === "worktree")
+      .filter((l) => l.section === "wt")
       .find((l) => l.fullPath.endsWith("repo-detached"));
     expect(detached?.name).toBe("detached@ccccccc");
   });
 
-  it("skips the new worktree section when no defaultBranchRef is available", () => {
+  it("does not emit a synthetic 'new worktree' line - that is handled by the /new slash command", () => {
     const lines = buildSections({
-      repo: makeRepo({ defaultBranchRef: null, defaultBranch: null }),
+      repo: makeRepo(),
       prs: [],
       localBranches: [],
       home: HOME,
     });
-    expect(lines.find((l) => l.section === "new worktree")).toBeUndefined();
+    expect(lines.find((l) => l.kind === "branch" && l.name === "create new worktree")).toBeUndefined();
+    // Also confirm there is no row whose only purpose is creation.
+    expect(lines.every((l) => l.section === "main" || l.section === "wt" || l.section === "br" || l.section === "pr")).toBe(true);
   });
 
-  it("excludes non-main branches that already have a worktree from the local branch section", () => {
-    // Note: matches bash behaviour - the main worktree's branch ("main") is
-    // intentionally NOT added to the exclusion set, so it still appears here.
+  it("excludes non-main branches that already have a worktree from the branch section", () => {
     const lines = buildSections({
       repo: makeRepo(),
       prs: [],
       localBranches: ["main", "feature", "draft"],
       home: HOME,
     });
-    const branchNames = lines.filter((l) => l.section === "local branch").map((l) => l.name);
+    const branchNames = lines.filter((l) => l.section === "br").map((l) => l.name);
     expect(branchNames).toEqual(["main", "draft"]);
   });
 
@@ -103,7 +99,7 @@ describe("buildSections", () => {
       localBranches: ["pr-only", "draft"],
       home: HOME,
     });
-    const branchNames = lines.filter((l) => l.section === "local branch").map((l) => l.name);
+    const branchNames = lines.filter((l) => l.section === "br").map((l) => l.name);
     expect(branchNames).toEqual(["draft"]);
   });
 
@@ -114,7 +110,7 @@ describe("buildSections", () => {
       localBranches: [],
       home: HOME,
     });
-    const pr = lines.find((l) => l.section === "github pr");
+    const pr = lines.find((l) => l.section === "pr");
     expect(pr?.destination).toBe("/Users/me/dev/repo-feature");
   });
 
@@ -125,7 +121,7 @@ describe("buildSections", () => {
       localBranches: [],
       home: HOME,
     });
-    const pr = lines.find((l) => l.section === "github pr");
+    const pr = lines.find((l) => l.section === "pr");
     expect(pr?.destination).toBe("/Users/me/dev/repo-pr-42");
   });
 
@@ -136,33 +132,18 @@ describe("buildSections", () => {
       localBranches: ["draft/notes"],
       home: HOME,
     });
-    const branch = lines.find((l) => l.section === "local branch");
+    const branch = lines.find((l) => l.section === "br");
     expect(branch?.destination).toBe("/Users/me/dev/repo-draft-notes");
   });
 
-  it("emits one delete entry per non-main worktree", () => {
-    const lines = buildSections({
-      repo: makeRepo(),
-      prs: [],
-      localBranches: [],
-      home: HOME,
-    });
-    const deletes = lines.filter((l) => l.section === "delete worktree");
-    expect(deletes).toHaveLength(2);
-    expect(deletes.every((l) => l.kind === "delete")).toBe(true);
-  });
-
   it("points a PR entry whose head IS the main branch at a fresh pr-N path, not the main worktree", () => {
-    // Critical bug regression: previously findWorktreePathForBranch would
-    // match the main worktree's branch and try to create a detached worktree
-    // on top of `mainWorktree` itself.
     const lines = buildSections({
       repo: makeRepo(),
       prs: [{ number: 99, branch: "main", title: "release prep" }],
       localBranches: [],
       home: HOME,
     });
-    const pr = lines.find((l) => l.section === "github pr");
+    const pr = lines.find((l) => l.section === "pr");
     expect(pr?.destination).toBe("/Users/me/dev/repo-pr-99");
     expect(pr?.destination).not.toBe("/Users/me/dev/repo");
   });
@@ -175,18 +156,16 @@ describe("buildSections", () => {
       home: HOME,
     });
     const counts = sectionCounts(lines);
-    expect(counts.get("root")).toBe(1);
-    expect(counts.get("new worktree")).toBe(1);
-    expect(counts.get("worktree")).toBe(2);
-    expect(counts.get("delete worktree")).toBe(2);
-    expect(counts.get("github pr")).toBe(1);
-    expect(counts.get("local branch")).toBe(1);
+    expect(counts.get("main")).toBe(1);
+    expect(counts.get("wt")).toBe(2);
+    expect(counts.get("pr")).toBe(1);
+    expect(counts.get("br")).toBe(1);
   });
 });
 
 describe("deriveBranchesWithWorktree", () => {
   it("collects branches from non-main worktrees and excludes the main one", () => {
-    const repo = {
+    const repo: RepoContext = {
       mainWorktree: "/repo",
       mainParent: "/",
       repoName: "repo",

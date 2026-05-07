@@ -56,7 +56,6 @@ export async function deleteWorktreeAction(
     return { kind: "deleted" };
   }
 
-  // Non-zero: show git's message and ask the user whether to force.
   if (result.stderr) ctx.console.errln(result.stderr.trimEnd());
   ctx.console.debug(`worktree is dirty, prompting for force delete`);
 
@@ -85,9 +84,6 @@ export async function createWorktreeForBranchAction(
   branch: string,
   target: string,
 ): Promise<number> {
-  if (!(await ctx.console.confirm(`Create worktree for "${branch}" at "${target}"? [y/N] `))) {
-    return EXIT_CANCELLED;
-  }
   await assertDestinationFree(target);
   await addWorktreeForBranch(ctx.repo.cwd, target, branch);
   await copyConfiguredIgnoredPaths({
@@ -100,20 +96,19 @@ export async function createWorktreeForBranchAction(
   return 0;
 }
 
-export async function createNewWorktreeAction(ctx: ActionContext): Promise<number> {
+export async function createNewWorktreeAction(
+  ctx: ActionContext,
+  branchArg?: string,
+): Promise<number> {
   const ref = ctx.repo.defaultBranchRef;
   if (!ref) throw new CdwtError("failed to detect the default branch");
 
-  const branch = await readNewBranchName(ctx);
+  const branch =
+    branchArg !== undefined && branchArg !== ""
+      ? await validateNewBranch(ctx, branchArg)
+      : await readNewBranchName(ctx);
   if (branch === null) return EXIT_CANCELLED;
   const target = makeBranchPath(branch, ctx.repo.mainWorktree, ctx.repo.repoName);
-  if (
-    !(await ctx.console.confirm(
-      `Create worktree for "${branch} from ${ref}" at "${target}"? [y/N] `,
-    ))
-  ) {
-    return EXIT_CANCELLED;
-  }
   await assertDestinationFree(target);
   await addWorktreeNewBranch(ctx.repo.cwd, target, branch, ref);
   await copyConfiguredIgnoredPaths({
@@ -131,11 +126,6 @@ export async function createPrWorktreeAction(
   prNumber: number,
   target: string,
 ): Promise<number> {
-  if (
-    !(await ctx.console.confirm(`Create worktree for "PR #${prNumber}" at "${target}"? [y/N] `))
-  ) {
-    return EXIT_CANCELLED;
-  }
   await assertDestinationFree(target);
   await addWorktreeDetached(ctx.repo.cwd, target);
   const ok = await checkoutPr(target, prNumber);
@@ -153,25 +143,32 @@ export async function createPrWorktreeAction(
   return 0;
 }
 
+async function validateNewBranch(ctx: ActionContext, raw: string): Promise<string | null> {
+  const branch = raw.trim();
+  if (branch === "") return null;
+  if (!(await checkRefFormat(ctx.repo.cwd, branch))) {
+    ctx.console.errln(`cdwt: invalid branch name: ${branch}`);
+    return null;
+  }
+  if (await branchExists(ctx.repo.cwd, branch)) {
+    ctx.console.errln(`cdwt: branch already exists: ${branch}`);
+    return null;
+  }
+  if (ctx.branchesWithWorktree.has(branch)) {
+    ctx.console.errln(`cdwt: branch already has a worktree: ${branch}`);
+    return null;
+  }
+  return branch;
+}
+
 async function readNewBranchName(ctx: ActionContext): Promise<string | null> {
   for (let attempt = 0; attempt < MAX_BRANCH_PROMPT_RETRIES; attempt++) {
     const raw = await ctx.console.ask("New branch name: ");
     if (raw === null) return null;
     const branch = raw.trim();
     if (branch === "") return null;
-    if (!(await checkRefFormat(ctx.repo.cwd, branch))) {
-      ctx.console.errln(`cdwt: invalid branch name: ${branch}`);
-      continue;
-    }
-    if (await branchExists(ctx.repo.cwd, branch)) {
-      ctx.console.errln(`cdwt: branch already exists: ${branch}`);
-      continue;
-    }
-    if (ctx.branchesWithWorktree.has(branch)) {
-      ctx.console.errln(`cdwt: branch already has a worktree: ${branch}`);
-      continue;
-    }
-    return branch;
+    const validated = await validateNewBranch(ctx, branch);
+    if (validated !== null) return validated;
   }
   ctx.console.errln(`cdwt: too many invalid branch name attempts; aborting`);
   return null;

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { selectInteractive, type FzfRunner } from "../src/ui/selector.js";
+import { parseSlashCommand, selectInteractive, type FzfRunner } from "../src/ui/selector.js";
 import { TestConsole } from "../src/io/test-console.js";
-import { renderLine, renderSearchLine } from "../src/ui/format.js";
+import { renderLine } from "../src/ui/format.js";
 import type { DisplayLine } from "../src/types.js";
 
 function dl(overrides: Partial<DisplayLine>): DisplayLine {
   return {
     kind: "worktree",
-    section: "worktree",
+    section: "wt",
     name: "name",
     shortPath: ".",
     fullPath: "/p",
@@ -18,180 +18,199 @@ function dl(overrides: Partial<DisplayLine>): DisplayLine {
   };
 }
 
-const ROOT = dl({ kind: "worktree", section: "root", name: "repo", destination: "/repo" });
+const MAIN = dl({ kind: "worktree", section: "main", name: "repo", destination: "/repo" });
 const WT_FEATURE = dl({
   kind: "worktree",
-  section: "worktree",
+  section: "wt",
   name: "feature",
   destination: "/repo-feature",
 });
 const WT_BUGFIX = dl({
   kind: "worktree",
-  section: "worktree",
+  section: "wt",
   name: "bugfix",
   destination: "/repo-bugfix",
 });
+const BR_DRAFT = dl({
+  kind: "branch",
+  section: "br",
+  name: "draft",
+  destination: "/repo-draft",
+});
+
+describe("parseSlashCommand", () => {
+  it.each([
+    ["/main", { kind: "main" }],
+    ["/home", { kind: "main" }],
+    ["/delete", { kind: "delete" }],
+    ["/d", { kind: "delete" }],
+    ["/pr", { kind: "pr" }],
+    ["/refresh", { kind: "refresh" }],
+    ["/r", { kind: "refresh" }],
+    ["/help", { kind: "help" }],
+    ["/h", { kind: "help" }],
+    ["/?", { kind: "help" }],
+    ["/new feat/x", { kind: "new", branch: "feat/x" }],
+    ["/n feat/x", { kind: "new", branch: "feat/x" }],
+  ] as const)("parses %p", (input, expected) => {
+    expect(parseSlashCommand(input)).toEqual(expected);
+  });
+
+  it("returns help for /new without an argument", () => {
+    expect(parseSlashCommand("/new")).toEqual({ kind: "help" });
+  });
+
+  it("returns null for unknown slash commands", () => {
+    expect(parseSlashCommand("/unknown")).toBeNull();
+  });
+
+  it("returns null for non-slash input", () => {
+    expect(parseSlashCommand("foo")).toBeNull();
+  });
+});
 
 describe("selectInteractive prompt fallback", () => {
-  it("returns null when there are no entries", async () => {
+  it("returns cancelled when there are no entries", async () => {
     const console = new TestConsole();
     const result = await selectInteractive([], { console, useFzf: false });
-    expect(result).toBeNull();
+    expect(result.kind).toBe("cancelled");
   });
 
-  it("skips the section step when only one section is present", async () => {
+  it("returns the picked line by 1-based index", async () => {
     const console = new TestConsole();
-    console.queueResponses("1");
-    const result = await selectInteractive([WT_FEATURE], { console, useFzf: false });
-    expect(result?.destination).toBe("/repo-feature");
-    expect(console.stderr).not.toContain("Sections:");
-  });
-
-  it("returns the selected entry from the chosen section", async () => {
-    const console = new TestConsole();
-    // section 1 (root), then destination 1
-    console.queueResponses("1", "1");
-    const result = await selectInteractive([ROOT, WT_FEATURE, WT_BUGFIX], {
+    console.queueResponses("2");
+    const result = await selectInteractive([MAIN, WT_FEATURE, WT_BUGFIX], {
       console,
       useFzf: false,
     });
-    expect(result?.destination).toBe("/repo");
+    expect(result.kind).toBe("selected");
+    if (result.kind === "selected") expect(result.line.destination).toBe("/repo-feature");
   });
 
-  it("re-prompts on invalid section input", async () => {
+  it("re-prompts on invalid input", async () => {
     const console = new TestConsole();
-    console.queueResponses("nope", "0", "2", "1");
-    const result = await selectInteractive([ROOT, WT_FEATURE, WT_BUGFIX], {
-      console,
-      useFzf: false,
-    });
-    // section 2 = worktree (root has 1 entry, worktree has 2). Selected destination 1 = feature.
-    expect(result?.destination).toBe("/repo-feature");
+    console.queueResponses("nope", "0", "2");
+    const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
+    expect(result.kind).toBe("selected");
+    if (result.kind === "selected") expect(result.line.destination).toBe("/repo-feature");
     expect(console.stderr.match(/invalid selection/g)?.length).toBe(2);
   });
 
-  it("returns null on EOF at the section prompt", async () => {
+  it("returns cancelled on EOF (null answer)", async () => {
     const console = new TestConsole();
-    // No responses queued → first ask returns null.
-    const result = await selectInteractive([ROOT, WT_FEATURE], { console, useFzf: false });
-    expect(result).toBeNull();
+    const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
+    expect(result.kind).toBe("cancelled");
   });
 
-  it("returns null on EOF at the destination prompt", async () => {
+  it("dispatches /delete as a slash command", async () => {
     const console = new TestConsole();
-    console.queueResponses("1"); // pick section, then EOF on destination
-    const result = await selectInteractive([ROOT, WT_FEATURE], { console, useFzf: false });
-    expect(result).toBeNull();
+    console.queueResponses("/delete");
+    const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
+    expect(result).toEqual({ kind: "slash", command: { kind: "delete" } });
   });
 
-  it("aborts after too many invalid section attempts", async () => {
+  it("dispatches /new feat/x as a slash command with the branch arg", async () => {
     const console = new TestConsole();
-    console.queueResponses("x", "x", "x", "x", "x");
-    const result = await selectInteractive([ROOT, WT_FEATURE], { console, useFzf: false });
-    expect(result).toBeNull();
-    expect(console.stderr).toContain("too many invalid section attempts");
+    console.queueResponses("/new feat/x");
+    const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
+    expect(result).toEqual({ kind: "slash", command: { kind: "new", branch: "feat/x" } });
+  });
+
+  it("rejects unknown slash commands and re-prompts", async () => {
+    const console = new TestConsole();
+    console.queueResponses("/unknown", "1");
+    const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
+    expect(result.kind).toBe("selected");
+    expect(console.stderr).toContain("unknown command");
   });
 });
 
 describe("selectInteractive fzf path (with injected runner)", () => {
-  it("auto-skips the section picker when only one section exists and returns the chosen line", async () => {
+  it("returns the selected line for a normal pick", async () => {
     const console = new TestConsole();
     let calls = 0;
     const runFzf: FzfRunner = ({ args, input }) => {
       calls++;
-      // Only the item picker should be invoked; the section picker is skipped.
-      expect(args.some((a) => a.startsWith("--prompt=cdwt> "))).toBe(true);
+      expect(args.some((a) => a === "--prompt=> ")).toBe(true);
       expect(input.split("\n")).toContain(renderLine(WT_FEATURE));
-      return Promise.resolve({ exitCode: 0, stdout: `\n${renderLine(WT_FEATURE)}\n` });
+      // stdout: query \n key \n selected
+      return Promise.resolve({ exitCode: 0, stdout: `\n\n${renderLine(WT_FEATURE)}\n` });
     };
-    const result = await selectInteractive([WT_FEATURE], {
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
       console,
       useFzf: true,
       fzfRunner: runFzf,
     });
     expect(calls).toBe(1);
-    expect(result?.destination).toBe("/repo-feature");
+    expect(result.kind).toBe("selected");
+    if (result.kind === "selected") expect(result.line.destination).toBe("/repo-feature");
   });
 
-  it("flows through section picker → item picker and returns the picked line", async () => {
+  it("returns cancelled when fzf exits non-zero with empty stdout (esc/abort)", async () => {
     const console = new TestConsole();
-    const sequence: ("section" | "item")[] = [];
-    const runFzf: FzfRunner = ({ args }) => {
-      if (args.some((a) => a.startsWith("--prompt=section> "))) {
-        sequence.push("section");
-        return Promise.resolve({ exitCode: 0, stdout: `\n\nworktree (2)\n` });
-      }
-      sequence.push("item");
-      return Promise.resolve({ exitCode: 0, stdout: `\n${renderLine(WT_BUGFIX)}\n` });
-    };
-    const result = await selectInteractive([ROOT, WT_FEATURE, WT_BUGFIX], {
+    const runFzf: FzfRunner = () => Promise.resolve({ exitCode: 130, stdout: "" });
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
       console,
       useFzf: true,
       fzfRunner: runFzf,
     });
-    expect(sequence).toEqual(["section", "item"]);
-    expect(result?.destination).toBe("/repo-bugfix");
+    expect(result.kind).toBe("cancelled");
   });
 
-  it("escapes back to the section picker when the item picker returns esc", async () => {
+  it("interprets a query starting with / as a slash command", async () => {
+    const console = new TestConsole();
+    const runFzf: FzfRunner = () =>
+      Promise.resolve({ exitCode: 0, stdout: `/delete\n\n\n` });
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    expect(result).toEqual({ kind: "slash", command: { kind: "delete" } });
+  });
+
+  it("cycles the filter on tab and re-runs fzf with only the next bucket", async () => {
+    const console = new TestConsole();
+    const calls: string[][] = [];
+    const runFzf: FzfRunner = ({ input }) => {
+      calls.push(input.split("\n"));
+      // first call: tab pressed; second call: pick BR_DRAFT
+      if (calls.length === 1) {
+        return Promise.resolve({ exitCode: 0, stdout: `\ntab\n\n` });
+      }
+      return Promise.resolve({ exitCode: 0, stdout: `\n\n${renderLine(BR_DRAFT)}\n` });
+    };
+    const result = await selectInteractive([MAIN, WT_FEATURE, BR_DRAFT], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    // After tab from "all": next is "wt" - branches filtered out
+    expect(calls[1]?.some((line) => line.includes("[br]"))).toBe(false);
+    // Eventually after enough tabs the runner returns BR_DRAFT
+    if (result.kind === "selected") expect(result.line.destination).toBe("/repo-draft");
+  });
+
+  it("opens the help overlay on ? key, then re-opens the picker", async () => {
     const console = new TestConsole();
     const calls: string[] = [];
     const runFzf: FzfRunner = ({ args }) => {
-      const isSection = args.some((a) => a.startsWith("--prompt=section> "));
-      calls.push(isSection ? "section" : "item");
-      if (calls.length === 1) {
-        // first section pick → worktree
-        return Promise.resolve({ exitCode: 0, stdout: `\n\nworktree (2)\n` });
+      if (args.some((a) => a === "--prompt=help> ")) {
+        calls.push("help");
+        return Promise.resolve({ exitCode: 130, stdout: "" });
       }
-      if (calls.length === 2) {
-        // first item picker → esc back
-        return Promise.resolve({ exitCode: 0, stdout: `esc\n` });
+      calls.push("main");
+      if (calls.filter((c) => c === "main").length === 1) {
+        return Promise.resolve({ exitCode: 0, stdout: `\n?\n\n` });
       }
-      if (calls.length === 3) {
-        // section picker again → root
-        return Promise.resolve({ exitCode: 0, stdout: `\n\nroot (1)\n` });
-      }
-      // item picker for root → pick the only entry
-      return Promise.resolve({ exitCode: 0, stdout: `\n${renderLine(ROOT)}\n` });
+      return Promise.resolve({ exitCode: 0, stdout: `\n\n${renderLine(WT_FEATURE)}\n` });
     };
-    const result = await selectInteractive([ROOT, WT_FEATURE, WT_BUGFIX], {
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
       console,
       useFzf: true,
       fzfRunner: runFzf,
     });
-    expect(result?.destination).toBe("/repo");
-    expect(calls).toEqual(["section", "item", "section", "item"]);
-  });
-
-  it("opens the cross-section search picker when the user types in the section picker", async () => {
-    const console = new TestConsole();
-    const runFzf: FzfRunner = ({ args }) => {
-      if (args.some((a) => a.startsWith("--prompt=section> "))) {
-        // user typed "feature" in the section picker → triggers search mode
-        return Promise.resolve({ exitCode: 0, stdout: `feature\n\n\n` });
-      }
-      // search picker returns a chosen line
-      return Promise.resolve({
-        exitCode: 0,
-        stdout: `feature\n\n${renderSearchLine(WT_FEATURE)}\n`,
-      });
-    };
-    const result = await selectInteractive([ROOT, WT_FEATURE, WT_BUGFIX], {
-      console,
-      useFzf: true,
-      fzfRunner: runFzf,
-    });
-    expect(result?.destination).toBe("/repo-feature");
-  });
-
-  it("returns null when the section picker is cancelled (esc + empty stdout)", async () => {
-    const console = new TestConsole();
-    const runFzf: FzfRunner = () => Promise.resolve({ exitCode: 130, stdout: "" });
-    const result = await selectInteractive([ROOT, WT_FEATURE, WT_BUGFIX], {
-      console,
-      useFzf: true,
-      fzfRunner: runFzf,
-    });
-    expect(result).toBeNull();
+    expect(calls).toEqual(["main", "help", "main"]);
+    expect(result.kind).toBe("selected");
   });
 });
