@@ -1,12 +1,18 @@
 import type { ConsoleIO } from "../io/console.js";
 import type { DisplayLine, SectionKey } from "../types.js";
 import { isFzfAvailable, runFzf as runFzfDefault, type FzfOptions, type FzfResult } from "./fzf.js";
-import { FIELD_SEP, renderLine } from "./format.js";
+import { FIELD_SEP, renderLine, sectionLabel } from "./format.js";
 
 export type FzfRunner = (options: FzfOptions) => Promise<FzfResult>;
 
 const FILTER_ORDER: readonly Filter[] = ["all", "wt", "br", "pr"];
 type Filter = "all" | "wt" | "br" | "pr";
+
+function filterLabel(filter: Filter): string {
+  return filter === "all" ? "all" : sectionLabel(filter);
+}
+
+const FILTER_CYCLE_LABEL = `${FILTER_ORDER.map(filterLabel).join(" / ")}`;
 
 /**
  * The fzf `/` key emits this sentinel via `become(...)`. `become` replaces
@@ -23,10 +29,16 @@ const HELP_BODY = [
   "shortcuts",
   "  enter            go to highlighted entry",
   "  esc              cancel",
-  "  tab / shift-tab  cycle filter (all / wt / br / pr)",
+  `  tab / shift-tab  cycle filter (${FILTER_CYCLE_LABEL})`,
   "  ctrl-d           delete the highlighted worktree",
   "  /                open the slash command palette",
   "  ?                this help",
+  "",
+  "row legend",
+  "  ★ [main]      default-branch worktree (enter = jump)",
+  "  ● [worktree]  existing linked worktree (enter = jump)",
+  "  ○ [branch]    local branch without a worktree (enter = create then jump)",
+  "  ◆ [PR]        GitHub PR (enter = checkout into a worktree then jump)",
 ];
 
 export type SelectOutcome =
@@ -86,13 +98,19 @@ async function selectWithFzf(
     }
     const inputLines = visible.map((line) => renderLine(line));
     const lookup = new Map(visible.map((line) => [renderLine(line), line]));
-    const header = filter === "all" ? "" : `filter: ${filter}`;
+    const header = filter === "all" ? "" : `filter: ${filterLabel(filter)}`;
     const result = await runFzf({
       args: [
         `--prompt=${prompt}`,
         "--print-query",
         `--delimiter=${FIELD_SEP}`,
         "--nth=1",
+        // Field 1 carries the colored "glyph + [tag] + name + dim path" row,
+        // fields 2/3 are data-only (preview / cd target). --with-nth=1 keeps
+        // the visible row tidy; --ansi makes fzf interpret the color codes
+        // and strip them when matching/printing.
+        "--with-nth=1",
+        "--ansi",
         "--expect=tab,btab,?,ctrl-d",
         "--height=70%",
         "--reverse",
@@ -224,7 +242,7 @@ async function selectWithPrompt(
       continue;
     }
     console.errln("");
-    if (filter !== "all") console.errln(`(filter: ${filter})`);
+    if (filter !== "all") console.errln(`(filter: ${filterLabel(filter)})`);
     visible.forEach((line, idx) =>
       console.errln(
         `${String(idx + 1).padStart(2)}) ${renderLine(line).split(FIELD_SEP)[0] ?? line.name}`,

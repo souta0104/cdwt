@@ -46,15 +46,19 @@ cdwt
 
 Opens a single picker with rows tagged by section (in this order):
 
-| Tag      | Action on `enter`                                           |
-| -------- | ----------------------------------------------------------- |
-| `[main]` | `cd` into the main worktree                                 |
-| `[wt]`   | `cd` into an existing linked worktree                       |
-| `[pr]`   | `cd` into the PR's worktree (creates a detached one if new) |
-| `[br]`   | runs `git worktree add` for that local branch and `cd`s in  |
+| Glyph + Tag      | Action on `enter`                                           |
+| ---------------- | ----------------------------------------------------------- |
+| `★ [main]`       | `cd` into the main worktree                                 |
+| `● [worktree]`   | `cd` into an existing linked worktree                       |
+| `◆ [PR]`         | `cd` into the PR's worktree (creates a detached one if new) |
+| `○ [branch]`     | runs `git worktree add` for that local branch and `cd`s in  |
+
+Filled glyphs (`★ ●`) mark rows whose worktree already exists on disk; open
+glyphs (`○ ◆`) mark rows that will create a new worktree on `enter`. Each
+section also has its own color so worktrees and branches are visually distinct.
 
 `/new <branch>` creates a new worktree from the default branch; `ctrl-d` on
-a `[wt]` row deletes that worktree (with a confirmation prompt).
+a `[worktree]` row deletes that worktree (with a confirmation prompt).
 
 ```sh
 cdwt --default-branch         # skip the picker, jump to the main worktree
@@ -92,9 +96,9 @@ With `fzf`:
 
 - `enter` — `cd` into the highlighted entry
 - `esc` — cancel
-- `tab` / `shift-tab` — cycle the filter (all / wt / br / pr)
+- `tab` / `shift-tab` — cycle the filter (all / worktree / branch / pr)
 - `ctrl-d` — delete the highlighted worktree (confirmation prompt)
-- `?` — show the help overlay
+- `?` — show the help overlay (includes a row legend)
 - `/` — slash commands (`/new <branch>`, `/main`, `/pr`, `/refresh`, `/help`)
 
 Without `fzf`: numbered prompt; type a number to jump, `d <number>` to

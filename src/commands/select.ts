@@ -8,6 +8,7 @@ import { listLocalBranches, setGitDebug } from "../io/git.js";
 import { loadRepoContext } from "../io/repo-context.js";
 import { selectInteractive, type SelectorOptions } from "../ui/selector.js";
 import { runCommandMode, type CommandModeOutcome } from "../ui/command-mode.js";
+import { sectionLabel } from "../ui/format.js";
 import type { DisplayLine, PullRequest, RepoContext } from "../types.js";
 import {
   EXIT_CANCELLED,
@@ -232,7 +233,9 @@ async function handleDeleteTarget(
     return undefined;
   }
   if (target.section !== "wt") {
-    options.console.errln(`cdwt: ctrl-d only deletes worktree entries (got [${target.section}])`);
+    options.console.errln(
+      `cdwt: ctrl-d only deletes worktree entries (got [${sectionLabel(target.section)}])`,
+    );
     return undefined;
   }
   const result = await deleteWorktreeAction(ctx, target.destination);

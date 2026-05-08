@@ -206,7 +206,7 @@ describe("selectInteractive fzf path (with injected runner)", () => {
       useFzf: true,
       fzfRunner: runFzf,
     });
-    expect(calls[1]?.some((line) => line.includes("[br]"))).toBe(false);
+    expect(calls[1]?.some((line) => line.includes("[branch]"))).toBe(false);
     if (result.kind === "selected") expect(result.line.destination).toBe("/repo-draft");
   });
 
