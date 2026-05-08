@@ -8,19 +8,19 @@ export type FzfRunner = (options: FzfOptions) => Promise<FzfResult>;
 const FILTER_ORDER: readonly Filter[] = ["all", "wt", "br", "pr"];
 type Filter = "all" | "wt" | "br" | "pr";
 
-const FOOTER = "↵ go   esc cancel   tab filter   / commands   ? help";
+const FOOTER = "↵ go   esc cancel   tab filter   ctrl-d delete   / commands   ? help";
 
 const HELP_BODY = [
   "shortcuts",
   "  enter            go to highlighted entry",
   "  esc              cancel",
   "  tab / shift-tab  cycle filter (all / wt / br / pr)",
+  "  ctrl-d           delete the highlighted worktree",
   "  /                slash commands",
   "  ?                this help",
   "",
   "slash commands",
   "  /new <branch>    create worktree from default branch and jump",
-  "  /delete          enter delete mode (pick a worktree to remove)",
   "  /main            jump to the main worktree",
   "  /pr              load and filter pull requests",
   "  /refresh         reload worktrees / branches / PRs",
@@ -29,7 +29,6 @@ const HELP_BODY = [
 
 export type SlashCommand =
   | { kind: "main" }
-  | { kind: "delete" }
   | { kind: "pr" }
   | { kind: "refresh" }
   | { kind: "help" }
@@ -38,6 +37,7 @@ export type SlashCommand =
 export type SelectOutcome =
   | { kind: "selected"; line: DisplayLine }
   | { kind: "slash"; command: SlashCommand }
+  | { kind: "delete-target"; line: DisplayLine }
   | { kind: "cancelled" };
 
 export interface SelectorOptions {
@@ -98,7 +98,7 @@ async function selectWithFzf(
         "--print-query",
         `--delimiter=${FIELD_SEP}`,
         "--nth=1",
-        "--expect=tab,btab,?",
+        "--expect=tab,btab,?,ctrl-d",
         "--height=70%",
         "--reverse",
         "--layout=reverse",
@@ -113,6 +113,9 @@ async function selectWithFzf(
       input: inputLines.join("\n"),
     });
     const outcome = parsePickerOutput(result.stdout, result.exitCode);
+    options.console.debug(
+      `fzf returned exit=${result.exitCode} key=${JSON.stringify(outcome.key)} query=${JSON.stringify(outcome.query)} selected=${outcome.selected ? "yes" : "no"}`,
+    );
     if (outcome.cancelled) return { kind: "cancelled" };
 
     if (outcome.query.startsWith("/")) {
@@ -124,14 +127,23 @@ async function selectWithFzf(
 
     if (outcome.key === "tab") {
       filter = nextFilter(filter, +1);
+      options.console.debug(`tab: filter -> ${filter}`);
       continue;
     }
     if (outcome.key === "btab") {
       filter = nextFilter(filter, -1);
+      options.console.debug(`shift-tab: filter -> ${filter}`);
       continue;
     }
     if (outcome.key === "?") {
       await runHelpOverlay(runFzf);
+      continue;
+    }
+    if (outcome.key === "ctrl-d") {
+      if (outcome.selected) {
+        const line = lookup.get(outcome.selected);
+        if (line) return { kind: "delete-target", line };
+      }
       continue;
     }
 
@@ -187,10 +199,6 @@ export function parseSlashCommand(raw: string): SlashCommand | null {
     case "main":
     case "home":
       return { kind: "main" };
-    case "delete":
-    case "d":
-    case "rm":
-      return { kind: "delete" };
     case "pr":
       return { kind: "pr" };
     case "refresh":
@@ -250,7 +258,7 @@ async function selectWithPrompt(
       ),
     );
     console.errln(
-      "type number to go, /new <branch>, /delete, /main, /pr, /refresh, /help, blank to cancel",
+      "type number to go, d <number> to delete, /new <branch>, /main, /pr, /refresh, /help, blank to cancel",
     );
     const answer = await console.ask("> ");
     if (answer === null) return { kind: "cancelled" };
@@ -271,6 +279,16 @@ async function selectWithPrompt(
     if (trimmed === "?") {
       console.errln(HELP_BODY.join("\n"));
       continue;
+    }
+
+    const deleteMatch = /^d\s+(\d+)$/i.exec(trimmed);
+    if (deleteMatch) {
+      const n = Number.parseInt(deleteMatch[1]!, 10);
+      if (!Number.isFinite(n) || n < 1 || n > visible.length) {
+        console.errln("cdwt: invalid selection");
+        continue;
+      }
+      return { kind: "delete-target", line: visible[n - 1]! };
     }
 
     const n = Number.parseInt(trimmed, 10);

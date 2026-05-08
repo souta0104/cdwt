@@ -42,8 +42,6 @@ describe("parseSlashCommand", () => {
   it.each([
     ["/main", { kind: "main" }],
     ["/home", { kind: "main" }],
-    ["/delete", { kind: "delete" }],
-    ["/d", { kind: "delete" }],
     ["/pr", { kind: "pr" }],
     ["/refresh", { kind: "refresh" }],
     ["/r", { kind: "refresh" }],
@@ -54,6 +52,12 @@ describe("parseSlashCommand", () => {
     ["/n feat/x", { kind: "new", branch: "feat/x" }],
   ] as const)("parses %p", (input, expected) => {
     expect(parseSlashCommand(input)).toEqual(expected);
+  });
+
+  it("no longer recognises /delete (replaced by ctrl-d)", () => {
+    expect(parseSlashCommand("/delete")).toBeNull();
+    expect(parseSlashCommand("/d")).toBeNull();
+    expect(parseSlashCommand("/rm")).toBeNull();
   });
 
   it("returns help for /new without an argument", () => {
@@ -102,11 +106,12 @@ describe("selectInteractive prompt fallback", () => {
     expect(result.kind).toBe("cancelled");
   });
 
-  it("dispatches /delete as a slash command", async () => {
+  it("dispatches `d <num>` as a delete-target outcome", async () => {
     const console = new TestConsole();
-    console.queueResponses("/delete");
+    console.queueResponses("d 2");
     const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
-    expect(result).toEqual({ kind: "slash", command: { kind: "delete" } });
+    expect(result.kind).toBe("delete-target");
+    if (result.kind === "delete-target") expect(result.line.destination).toBe("/repo-feature");
   });
 
   it("dispatches /new feat/x as a slash command with the branch arg", async () => {
@@ -160,13 +165,43 @@ describe("selectInteractive fzf path (with injected runner)", () => {
   it("interprets a query starting with / as a slash command", async () => {
     const console = new TestConsole();
     const runFzf: FzfRunner = () =>
-      Promise.resolve({ exitCode: 0, stdout: `/delete\n\n\n` });
+      Promise.resolve({ exitCode: 0, stdout: `/main\n\n\n` });
     const result = await selectInteractive([MAIN, WT_FEATURE], {
       console,
       useFzf: true,
       fzfRunner: runFzf,
     });
-    expect(result).toEqual({ kind: "slash", command: { kind: "delete" } });
+    expect(result).toEqual({ kind: "slash", command: { kind: "main" } });
+  });
+
+  it("returns delete-target when ctrl-d is pressed on a highlighted line", async () => {
+    const console = new TestConsole();
+    const runFzf: FzfRunner = () =>
+      Promise.resolve({ exitCode: 0, stdout: `\nctrl-d\n${renderLine(WT_FEATURE)}\n` });
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    expect(result.kind).toBe("delete-target");
+    if (result.kind === "delete-target") expect(result.line.destination).toBe("/repo-feature");
+  });
+
+  it("ignores ctrl-d when no line is highlighted and re-opens the picker", async () => {
+    const console = new TestConsole();
+    let calls = 0;
+    const runFzf: FzfRunner = () => {
+      calls++;
+      if (calls === 1) return Promise.resolve({ exitCode: 0, stdout: `\nctrl-d\n\n` });
+      return Promise.resolve({ exitCode: 0, stdout: `\n\n${renderLine(WT_FEATURE)}\n` });
+    };
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    expect(calls).toBe(2);
+    expect(result.kind).toBe("selected");
   });
 
   it("cycles the filter on tab and re-runs fzf with only the next bucket", async () => {

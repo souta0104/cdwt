@@ -44,16 +44,17 @@ stdout and the function `cd`s into it.
 cdwt
 ```
 
-Opens a selector grouped into sections (in this order):
+Opens a single picker with rows tagged by section (in this order):
 
-| Section           | Action on selection                                           |
-| ----------------- | ------------------------------------------------------------- |
-| `root`            | `cd` into the main worktree                                   |
-| `worktree`        | `cd` into an existing linked worktree                         |
-| `new worktree`    | prompts for a branch name, creates it from the default branch |
-| `delete worktree` | confirms, removes the worktree, then returns to root          |
-| `github pr`       | `cd` into the PR's worktree (creates a detached one if new)   |
-| `local branch`    | confirms, runs `git worktree add` for that branch             |
+| Tag      | Action on `enter`                                           |
+| -------- | ----------------------------------------------------------- |
+| `[main]` | `cd` into the main worktree                                 |
+| `[wt]`   | `cd` into an existing linked worktree                       |
+| `[pr]`   | `cd` into the PR's worktree (creates a detached one if new) |
+| `[br]`   | runs `git worktree add` for that local branch and `cd`s in  |
+
+`/new <branch>` creates a new worktree from the default branch; `ctrl-d` on
+a `[wt]` row deletes that worktree (with a confirmation prompt).
 
 ```sh
 cdwt --default-branch         # skip the picker, jump to the main worktree
@@ -89,11 +90,15 @@ with `-`, then trims leading/trailing dashes (e.g. `feature/awesome` →
 
 With `fzf`:
 
-- `esc` — return to the section list
-- `tab` / `shift-tab` — move between sections
-- type in the section list — opens a cross-section fuzzy search
+- `enter` — `cd` into the highlighted entry
+- `esc` — cancel
+- `tab` / `shift-tab` — cycle the filter (all / wt / br / pr)
+- `ctrl-d` — delete the highlighted worktree (confirmation prompt)
+- `?` — show the help overlay
+- `/` — slash commands (`/new <branch>`, `/main`, `/pr`, `/refresh`, `/help`)
 
-Without `fzf`: numbered prompt for the section, then for the entry.
+Without `fzf`: numbered prompt; type a number to jump, `d <number>` to
+delete that entry, or one of the slash commands above.
 
 ## Configuration
 

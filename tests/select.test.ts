@@ -45,7 +45,7 @@ describe("runSelect --default-branch", () => {
   });
 });
 
-describe("runSelect /delete slash flow", () => {
+describe("runSelect delete flow (d <num>)", () => {
   it("deletes two worktrees in sequence and ends at mainWorktree", async () => {
     const wtA = path.join(workdir, "repo-da");
     const wtB = path.join(workdir, "repo-db");
@@ -54,12 +54,11 @@ describe("runSelect /delete slash flow", () => {
 
     const console = new TestConsole();
     // prompt fallback flow:
-    // 1. main picker → /delete
-    // 2. delete picker → "1" picks first wt
-    // 3. confirm "y"
-    // 4. delete picker → "1" picks remaining wt
-    // 5. confirm "y"
-    console.queueResponses("/delete", "1", "y", "1", "y");
+    // 1. picker → "d 2" picks first wt (entry 1 is mainWorktree, 2 is wtA)
+    // 2. confirm "y"
+    // 3. picker → "d 2" picks remaining wt
+    // 4. confirm "y"
+    console.queueResponses("d 2", "y", "d 2", "y");
 
     const code = await runSelect({
       defaultBranchOnly: false,
@@ -76,16 +75,15 @@ describe("runSelect /delete slash flow", () => {
     await expect(stat(wtB)).rejects.toThrow();
   });
 
-  it("after delete, declining the next confirm returns to mainWorktree", async () => {
+  it("declining the confirm leaves the worktree in place and re-opens the picker", async () => {
     const wtA = path.join(workdir, "repo-dc");
     const wtB = path.join(workdir, "repo-dd");
     exec(repoDir, "git", ["worktree", "add", "-b", "dc", wtA]);
     exec(repoDir, "git", ["worktree", "add", "-b", "dd", wtB]);
 
     const console = new TestConsole();
-    // /delete → pick #1 → confirm y → pick #1 (last remaining) → confirm n
-    // After cancelling, runDeleteMode bubbles up; main picker EOF cancels.
-    console.queueResponses("/delete", "1", "y", "1", "n");
+    // d 2 → confirm y (deletes wtA) → d 2 → confirm n (cancels) → picker EOF cancels.
+    console.queueResponses("d 2", "y", "d 2", "n");
 
     const code = await runSelect({
       defaultBranchOnly: false,
@@ -96,12 +94,30 @@ describe("runSelect /delete slash flow", () => {
       selectorOptions: { useFzf: false },
     });
 
-    // EXIT_CANCELLED because the outer picker EOFs after delete-mode bubbles back.
     expect(code).toBe(130);
-    // One worktree gone, one survived.
     const aGone = await stat(wtA).then(() => false).catch(() => true);
     const bGone = await stat(wtB).then(() => false).catch(() => true);
     expect(aGone !== bGone).toBe(true);
+  });
+
+  it("rejects deleting the main worktree and re-opens the picker", async () => {
+    exec(repoDir, "git", ["worktree", "add", "-b", "keep", path.join(workdir, "repo-keep")]);
+
+    const console = new TestConsole();
+    // d 1 targets the [main] row → rejected, then EOF cancels.
+    console.queueResponses("d 1");
+
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+      selectorOptions: { useFzf: false },
+    });
+
+    expect(code).toBe(130);
+    expect(console.stderr).toContain("refusing to delete the default branch worktree");
   });
 
   it("/main jumps directly to mainWorktree", async () => {

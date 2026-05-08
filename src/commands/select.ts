@@ -122,6 +122,12 @@ export async function runSelect(options: SelectOptions): Promise<number> {
       return code;
     }
 
+    if (outcome.kind === "delete-target") {
+      const code = await handleDeleteTarget(state, ctx, options, outcome.line);
+      if (code === undefined) continue;
+      return code;
+    }
+
     const selected = outcome.line;
     console.debug(
       `selected: kind=${selected.kind} branch="${selected.branch}" destination="${selected.destination}"`,
@@ -162,8 +168,6 @@ async function dispatchSlash(
       return 0;
     case "new":
       return createNewWorktreeAction(ctx, command.branch);
-    case "delete":
-      return await runDeleteMode(state, ctx, options);
     case "pr": {
       if (!state.prsLoaded) {
         state.prs = await loadPrs(options.cwd, console);
@@ -181,42 +185,34 @@ async function dispatchSlash(
   }
 }
 
-async function runDeleteMode(
+/**
+ * Handle ctrl-d (or `d <num>` in prompt fallback) on a highlighted entry.
+ * Only acts on `wt` rows; other sections are rejected with a message and the
+ * picker re-opens. After a successful delete, refresh state and return to the
+ * picker — except when no worktree is left, in which case jump to main.
+ */
+async function handleDeleteTarget(
   state: State,
   ctx: ActionContext,
   options: SelectOptions,
+  target: DisplayLine,
 ): Promise<number | undefined> {
-  while (true) {
-    if (state.lines.filter((l) => l.section === "wt").length === 0) {
-      printDestination(options.console, state.repo.mainWorktree);
-      return 0;
-    }
-    const outcome = await selectInteractive(state.lines, {
-      console: options.console,
-      initialFilter: "wt",
-      prompt: "delete> ",
-      footer: "↵ delete   esc cancel",
-      ...options.selectorOptions,
-    });
-    if (outcome.kind === "cancelled") return undefined;
-    if (outcome.kind === "slash") {
-      // nested slash: bubble up to main loop
-      return undefined;
-    }
-    const target = outcome.line;
-    if (target.section === "main") {
-      options.console.errln("cdwt: refusing to delete the default branch worktree");
-      continue;
-    }
-    if (target.section !== "wt") continue;
-    const result = await deleteWorktreeAction(ctx, target.destination);
-    if (result.kind === "cancelled") return undefined;
-    await refresh(state, options);
-    if (state.lines.filter((l) => l.section === "wt").length === 0) {
-      printDestination(options.console, state.repo.mainWorktree);
-      return 0;
-    }
+  if (target.section === "main") {
+    options.console.errln("cdwt: refusing to delete the default branch worktree");
+    return undefined;
   }
+  if (target.section !== "wt") {
+    options.console.errln(`cdwt: ctrl-d only deletes worktree entries (got [${target.section}])`);
+    return undefined;
+  }
+  const result = await deleteWorktreeAction(ctx, target.destination);
+  if (result.kind === "cancelled") return undefined;
+  await refresh(state, options);
+  if (state.lines.filter((l) => l.section === "wt").length === 0) {
+    printDestination(options.console, state.repo.mainWorktree);
+    return 0;
+  }
+  return undefined;
 }
 
 async function refresh(state: State, options: SelectOptions): Promise<void> {
@@ -248,8 +244,8 @@ async function loadPrs(cwd: string, console: ConsoleIO): Promise<PullRequest[]> 
 }
 
 const HELP_TEXT = [
-  "shortcuts: enter=go  esc=cancel  tab=cycle filter  ?=help",
-  "slash: /new <branch>  /delete  /main  /pr  /refresh  /help",
+  "shortcuts: enter=go  esc=cancel  tab=cycle filter  ctrl-d=delete  ?=help",
+  "slash: /new <branch>  /main  /pr  /refresh  /help",
 ].join("\n");
 
 export function defaultHome(): string {
