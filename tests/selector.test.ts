@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseSlashCommand, selectInteractive, type FzfRunner } from "../src/ui/selector.js";
+import {
+  COMMAND_SENTINEL,
+  selectInteractive,
+  type FzfRunner,
+} from "../src/ui/selector.js";
 import { TestConsole } from "../src/io/test-console.js";
 import { renderLine } from "../src/ui/format.js";
 import type { DisplayLine } from "../src/types.js";
@@ -36,41 +40,6 @@ const BR_DRAFT = dl({
   section: "br",
   name: "draft",
   destination: "/repo-draft",
-});
-
-describe("parseSlashCommand", () => {
-  it.each([
-    ["/main", { kind: "main" }],
-    ["/home", { kind: "main" }],
-    ["/pr", { kind: "pr" }],
-    ["/refresh", { kind: "refresh" }],
-    ["/r", { kind: "refresh" }],
-    ["/help", { kind: "help" }],
-    ["/h", { kind: "help" }],
-    ["/?", { kind: "help" }],
-    ["/new feat/x", { kind: "new", branch: "feat/x" }],
-    ["/n feat/x", { kind: "new", branch: "feat/x" }],
-  ] as const)("parses %p", (input, expected) => {
-    expect(parseSlashCommand(input)).toEqual(expected);
-  });
-
-  it("no longer recognises /delete (replaced by ctrl-d)", () => {
-    expect(parseSlashCommand("/delete")).toBeNull();
-    expect(parseSlashCommand("/d")).toBeNull();
-    expect(parseSlashCommand("/rm")).toBeNull();
-  });
-
-  it("returns help for /new without an argument", () => {
-    expect(parseSlashCommand("/new")).toEqual({ kind: "help" });
-  });
-
-  it("returns null for unknown slash commands", () => {
-    expect(parseSlashCommand("/unknown")).toBeNull();
-  });
-
-  it("returns null for non-slash input", () => {
-    expect(parseSlashCommand("foo")).toBeNull();
-  });
 });
 
 describe("selectInteractive prompt fallback", () => {
@@ -114,19 +83,18 @@ describe("selectInteractive prompt fallback", () => {
     if (result.kind === "delete-target") expect(result.line.destination).toBe("/repo-feature");
   });
 
-  it("dispatches /new feat/x as a slash command with the branch arg", async () => {
+  it("returns command-mode (with the typed line) when the input starts with /", async () => {
     const console = new TestConsole();
     console.queueResponses("/new feat/x");
     const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
-    expect(result).toEqual({ kind: "slash", command: { kind: "new", branch: "feat/x" } });
+    expect(result).toEqual({ kind: "command-mode", initialInput: "/new feat/x" });
   });
 
-  it("rejects unknown slash commands and re-prompts", async () => {
+  it("returns command-mode for a bare / as well", async () => {
     const console = new TestConsole();
-    console.queueResponses("/unknown", "1");
+    console.queueResponses("/");
     const result = await selectInteractive([MAIN, WT_FEATURE], { console, useFzf: false });
-    expect(result.kind).toBe("selected");
-    expect(console.stderr).toContain("unknown command");
+    expect(result).toEqual({ kind: "command-mode", initialInput: "/" });
   });
 });
 
@@ -162,16 +130,35 @@ describe("selectInteractive fzf path (with injected runner)", () => {
     expect(result.kind).toBe("cancelled");
   });
 
-  it("interprets a query starting with / as a slash command", async () => {
+  it("returns command-mode when fzf prints the slash sentinel", async () => {
     const console = new TestConsole();
+    // The `/` keybind uses `become(printf ...)` to replace fzf with a printf
+    // that writes the sentinel and exits 0.
     const runFzf: FzfRunner = () =>
-      Promise.resolve({ exitCode: 0, stdout: `/main\n\n\n` });
+      Promise.resolve({ exitCode: 0, stdout: `${COMMAND_SENTINEL}\n` });
     const result = await selectInteractive([MAIN, WT_FEATURE], {
       console,
       useFzf: true,
       fzfRunner: runFzf,
     });
-    expect(result).toEqual({ kind: "slash", command: { kind: "main" } });
+    expect(result).toEqual({ kind: "command-mode" });
+  });
+
+  it("uses become(printf ...) for the / binding so the sentinel survives abort", async () => {
+    const console = new TestConsole();
+    const seen: string[][] = [];
+    const runFzf: FzfRunner = ({ args }) => {
+      seen.push(args);
+      return Promise.resolve({ exitCode: 130, stdout: "" });
+    };
+    await selectInteractive([MAIN, WT_FEATURE], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    const slashBind = seen[0]?.find((a) => a.startsWith("--bind=/:"));
+    expect(slashBind).toContain("become(");
+    expect(slashBind).toContain(COMMAND_SENTINEL);
   });
 
   it("returns delete-target when ctrl-d is pressed on a highlighted line", async () => {
@@ -209,7 +196,6 @@ describe("selectInteractive fzf path (with injected runner)", () => {
     const calls: string[][] = [];
     const runFzf: FzfRunner = ({ input }) => {
       calls.push(input.split("\n"));
-      // first call: tab pressed; second call: pick BR_DRAFT
       if (calls.length === 1) {
         return Promise.resolve({ exitCode: 0, stdout: `\ntab\n\n` });
       }
@@ -220,9 +206,7 @@ describe("selectInteractive fzf path (with injected runner)", () => {
       useFzf: true,
       fzfRunner: runFzf,
     });
-    // After tab from "all": next is "wt" - branches filtered out
     expect(calls[1]?.some((line) => line.includes("[br]"))).toBe(false);
-    // Eventually after enough tabs the runner returns BR_DRAFT
     if (result.kind === "selected") expect(result.line.destination).toBe("/repo-draft");
   });
 

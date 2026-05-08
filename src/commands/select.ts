@@ -6,11 +6,8 @@ import type { ConsoleIO } from "../io/console.js";
 import { isGhAvailable, listPullRequests } from "../io/gh.js";
 import { listLocalBranches, setGitDebug } from "../io/git.js";
 import { loadRepoContext } from "../io/repo-context.js";
-import {
-  selectInteractive,
-  type SelectorOptions,
-  type SlashCommand,
-} from "../ui/selector.js";
+import { selectInteractive, type SelectorOptions } from "../ui/selector.js";
+import { runCommandMode, type CommandModeOutcome } from "../ui/command-mode.js";
 import type { DisplayLine, PullRequest, RepoContext } from "../types.js";
 import {
   EXIT_CANCELLED,
@@ -21,6 +18,12 @@ import {
   printDestination,
   type ActionContext,
 } from "./actions.js";
+import {
+  SLASH_COMMANDS,
+  type CommandHost,
+  type CommandResult,
+  type SlashCommand,
+} from "./slash-commands.js";
 
 export interface SelectOptions {
   defaultBranchOnly: boolean;
@@ -112,77 +115,104 @@ export async function runSelect(options: SelectOptions): Promise<number> {
     });
     initialFilter = undefined;
 
-    if (outcome.kind === "cancelled") {
-      return EXIT_CANCELLED;
-    }
-
-    if (outcome.kind === "slash") {
-      const code = await dispatchSlash(state, ctx, options, outcome.command);
-      if (code === undefined) continue;
-      return code;
-    }
-
-    if (outcome.kind === "delete-target") {
-      const code = await handleDeleteTarget(state, ctx, options, outcome.line);
-      if (code === undefined) continue;
-      return code;
-    }
-
-    const selected = outcome.line;
-    console.debug(
-      `selected: kind=${selected.kind} branch="${selected.branch}" destination="${selected.destination}"`,
-    );
-
-    switch (selected.kind) {
-      case "worktree":
-        printDestination(console, selected.destination);
-        return 0;
-      case "branch":
-        return createWorktreeForBranchAction(ctx, selected.branch, selected.destination);
-      case "pr": {
-        if (selected.prNumber === null) throw new CdwtError("missing PR number");
-        if (ctx.branchesWithWorktree.has(selected.branch)) {
-          printDestination(console, selected.destination);
-          return 0;
-        }
-        return createPrWorktreeAction(ctx, selected.prNumber, selected.destination);
+    switch (outcome.kind) {
+      case "cancelled":
+        return EXIT_CANCELLED;
+      case "command-mode": {
+        const code = await enterCommandMode(state, ctx, options, outcome.initialInput);
+        if (code !== undefined) return code;
+        continue;
       }
+      case "delete-target": {
+        const code = await handleDeleteTarget(state, ctx, options, outcome.line);
+        if (code !== undefined) return code;
+        continue;
+      }
+      case "selected":
+        return dispatchSelected(state, ctx, options, outcome.line);
+    }
+  }
+}
+
+async function dispatchSelected(
+  _state: State,
+  ctx: ActionContext,
+  options: SelectOptions,
+  selected: DisplayLine,
+): Promise<number> {
+  options.console.debug(
+    `selected: kind=${selected.kind} branch="${selected.branch}" destination="${selected.destination}"`,
+  );
+  switch (selected.kind) {
+    case "worktree":
+      printDestination(options.console, selected.destination);
+      return 0;
+    case "branch":
+      return createWorktreeForBranchAction(ctx, selected.branch, selected.destination);
+    case "pr": {
+      if (selected.prNumber === null) throw new CdwtError("missing PR number");
+      if (ctx.branchesWithWorktree.has(selected.branch)) {
+        printDestination(options.console, selected.destination);
+        return 0;
+      }
+      return createPrWorktreeAction(ctx, selected.prNumber, selected.destination);
     }
   }
 }
 
 /**
- * Run a slash command. Returns an exit code to terminate the session, or
- * `undefined` to keep looping (e.g. after a refresh or delete-mode entry).
+ * Drive the slash-command UI. Returns an exit code to terminate `runSelect`,
+ * or `undefined` to re-open the picker.
  */
-async function dispatchSlash(
+async function enterCommandMode(
   state: State,
   ctx: ActionContext,
   options: SelectOptions,
-  command: SlashCommand,
+  initialInput: string | undefined,
 ): Promise<number | undefined> {
-  const { console } = options;
-  switch (command.kind) {
-    case "main":
-      printDestination(console, state.repo.mainWorktree);
-      return 0;
-    case "new":
-      return createNewWorktreeAction(ctx, command.branch);
-    case "pr": {
-      if (!state.prsLoaded) {
-        state.prs = await loadPrs(options.cwd, console);
-        state.prsLoaded = true;
-        rebuildLines(state, options.home);
-      }
-      return undefined;
-    }
-    case "refresh":
+  const cmdOptions = {
+    console: options.console,
+    registry: SLASH_COMMANDS,
+    ...(options.selectorOptions?.useFzf !== undefined
+      ? { useFzf: options.selectorOptions.useFzf }
+      : {}),
+    ...(options.selectorOptions?.fzfRunner
+      ? { fzfRunner: options.selectorOptions.fzfRunner }
+      : {}),
+    ...(initialInput !== undefined ? { initialInput } : {}),
+  };
+  const picked: CommandModeOutcome = await runCommandMode(cmdOptions);
+  if (picked.kind === "cancelled") return undefined;
+
+  const host = makeCommandHost(state, ctx, options);
+  const result: CommandResult = await picked.command.execute(picked.args, host);
+  if (result.kind === "exit") return result.code;
+  return undefined;
+}
+
+function makeCommandHost(
+  state: State,
+  ctx: ActionContext,
+  options: SelectOptions,
+): CommandHost {
+  return {
+    console: options.console,
+    printMainDestination() {
+      printDestination(options.console, state.repo.mainWorktree);
+    },
+    createNewWorktree(branch: string | undefined) {
+      return createNewWorktreeAction(ctx, branch);
+    },
+    async loadPrs() {
+      if (state.prsLoaded) return;
+      state.prs = await loadPrs(options.cwd, options.console);
+      state.prsLoaded = true;
+      rebuildLines(state, options.home);
+    },
+    async refresh() {
       await refresh(state, options);
-      return undefined;
-    case "help":
-      console.errln(HELP_TEXT);
-      return undefined;
-  }
+    },
+  };
 }
 
 /**
@@ -243,10 +273,8 @@ async function loadPrs(cwd: string, console: ConsoleIO): Promise<PullRequest[]> 
   return prs;
 }
 
-const HELP_TEXT = [
-  "shortcuts: enter=go  esc=cancel  tab=cycle filter  ctrl-d=delete  ?=help",
-  "slash: /new <branch>  /main  /pr  /refresh  /help",
-].join("\n");
+// Re-exported so existing callers that imported it from select.ts keep working.
+export type { SlashCommand };
 
 export function defaultHome(): string {
   return process.env["HOME"] ?? homedir();
