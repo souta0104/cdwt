@@ -23,13 +23,13 @@ Written in TypeScript, distributed as an `npx`-installable CLI plus a small
 Try it once:
 
 ```sh
-npx cdwt --default-branch     # prints the main worktree path
+npx @soprog_/cdwt --default-branch
 ```
 
 Install for daily use:
 
 ```sh
-npm i -g cdwt                 # or: pnpm add -g cdwt
+npm i -g @soprog_/cdwt        # or: pnpm add -g @soprog_/cdwt
 cdwt install                  # writes shell function + sources it from ~/.zshrc
 exec zsh -l
 ```
