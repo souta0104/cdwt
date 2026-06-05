@@ -29,7 +29,7 @@ afterEach(async () => {
   await rm(workdir, { recursive: true, force: true });
 });
 
-describe("runSelect --default-branch", () => {
+describe("runSelect defaultBranchOnly", () => {
   it("prints the main worktree and exits 0 without prompting", async () => {
     const console = new TestConsole();
     const code = await runSelect({
@@ -153,7 +153,7 @@ describe("runSelect delete flow (d <num>)", () => {
   });
 });
 
-describe("runSelect --new", () => {
+describe("runSelect newBranch", () => {
   it("creates a worktree with the given branch name and exits 0", async () => {
     const console = new TestConsole();
     const code = await runSelect({
@@ -170,7 +170,7 @@ describe("runSelect --new", () => {
     expect((await stat(expected)).isDirectory()).toBe(true);
   });
 
-  it("prompts for a branch name when --new is used without argument", async () => {
+  it("prompts for a branch name when newBranch is true", async () => {
     const console = new TestConsole();
     console.queueResponses("prompted-branch");
     const code = await runSelect({
