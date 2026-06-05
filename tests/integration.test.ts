@@ -135,13 +135,13 @@ describe("inheritStdio keeps the parent's stdout clean", () => {
         });
         let stdout = "";
         let stderr = "";
-        child.stdout!.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
-        child.stderr!.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+        child.stdout.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
+        child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
         child.on("error", reject);
         child.on("close", (code: number | null) =>
           resolve({ exitCode: code ?? 0, stdout, stderr }),
         );
-        child.stdin!.end();
+        child.stdin.end();
       },
     );
     expect(result.exitCode).toBe(0);
