@@ -10,14 +10,16 @@ interface GlobalFlags {
 }
 
 interface SelectFlags extends GlobalFlags {
-  defaultBranch?: boolean;
   pr?: boolean;
-  new?: boolean | string;
   config?: string;
 }
 
 interface InstallFlags extends GlobalFlags {
   rc?: string;
+}
+
+interface NewFlags extends GlobalFlags {
+  config?: string;
 }
 
 /**
@@ -43,12 +45,7 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     .option("-v, --verbose", "write timestamped diagnostic logs to stderr");
 
   program
-    .option("--default-branch", "print the path of the default branch worktree and exit")
     .option("--pr", "open the picker pre-filtered to PRs (loads `gh pr list` immediately)")
-    .option(
-      "--new [branch]",
-      "create a new worktree from the default branch and cd into it (prompts for name if omitted)",
-    )
     .option(
       "--config <file>",
       "use only the given settings file (overrides .cdwt/settings.json discovery)",
@@ -57,9 +54,44 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
       const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
       const console = consoleFactory(verbose);
       state.exitCode = await runSelect({
-        defaultBranchOnly: Boolean(opts.defaultBranch),
+        defaultBranchOnly: false,
         prFilter: Boolean(opts.pr),
-        ...(opts.new !== undefined ? { newBranch: opts.new as string | true } : {}),
+        cwd: process.cwd(),
+        configOverride: opts.config ?? process.env["CDWT_CONFIG"],
+        home: selectHome(),
+        console,
+      });
+    });
+
+  program
+    .command("root")
+    .description("print the path of the default branch worktree and exit")
+    .action(async () => {
+      const verbose = Boolean(program.opts<GlobalFlags>().verbose);
+      const console = consoleFactory(verbose);
+      state.exitCode = await runSelect({
+        defaultBranchOnly: true,
+        cwd: process.cwd(),
+        configOverride: process.env["CDWT_CONFIG"],
+        home: selectHome(),
+        console,
+      });
+    });
+
+  program
+    .command("new")
+    .description("create a new worktree from the default branch and cd into it")
+    .argument("[branch]", "branch name (prompts when omitted)")
+    .option(
+      "--config <file>",
+      "use only the given settings file (overrides .cdwt/settings.json discovery)",
+    )
+    .action(async (branch: string | undefined, opts: NewFlags) => {
+      const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
+      const console = consoleFactory(verbose);
+      state.exitCode = await runSelect({
+        defaultBranchOnly: false,
+        newBranch: branch ?? true,
         cwd: process.cwd(),
         configOverride: opts.config ?? process.env["CDWT_CONFIG"],
         home: selectHome(),

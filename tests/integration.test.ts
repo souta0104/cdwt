@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -96,13 +96,25 @@ describe("config loader", () => {
   });
 });
 
-describe("--default-branch CLI", () => {
+describe("root CLI", () => {
   it("prints the main worktree path and exits 0", () => {
-    const out = execFileSync("node", [cliPath, "--default-branch"], {
+    const out = execFileSync("node", [cliPath, "root"], {
       cwd: repoDir,
       encoding: "utf8",
     });
     expect(out.trim()).toBe(repoDir);
+  });
+});
+
+describe("new CLI", () => {
+  it("creates a worktree with the given branch name and exits 0", async () => {
+    const out = execFileSync("node", [cliPath, "new", "feat-x"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    });
+    const expected = path.join(workdir, "repo-feat-x");
+    expect(out.trim()).toBe(expected);
+    expect((await stat(expected)).isDirectory()).toBe(true);
   });
 });
 
