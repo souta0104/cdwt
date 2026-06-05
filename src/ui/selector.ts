@@ -1,7 +1,7 @@
 import type { ConsoleIO } from "../io/console.js";
 import type { DisplayLine, SectionKey } from "../types.js";
 import { isFzfAvailable, runFzf as runFzfDefault, type FzfOptions, type FzfResult } from "./fzf.js";
-import { FIELD_SEP, renderLine, sectionLabel } from "./format.js";
+import { FIELD_SEP, renderLine, sectionLabel, stripAnsi } from "./format.js";
 
 export type FzfRunner = (options: FzfOptions) => Promise<FzfResult>;
 
@@ -97,7 +97,9 @@ async function selectWithFzf(
       continue;
     }
     const inputLines = visible.map((line) => renderLine(line));
-    const lookup = new Map(visible.map((line) => [renderLine(line), line]));
+    // fzf --ansi strips ANSI escape codes from its output, so the lookup
+    // keys must also be stripped to match.
+    const lookup = new Map(visible.map((line) => [stripAnsi(renderLine(line)), line]));
     const header = filter === "all" ? "" : `filter: ${filterLabel(filter)}`;
     const result = await runFzf({
       args: [
@@ -156,14 +158,14 @@ async function selectWithFzf(
     }
     if (outcome.key === "ctrl-d") {
       if (outcome.selected) {
-        const line = lookup.get(outcome.selected);
+        const line = lookup.get(stripAnsi(outcome.selected));
         if (line) return { kind: "delete-target", line };
       }
       continue;
     }
 
     if (outcome.selected) {
-      const line = lookup.get(outcome.selected);
+      const line = lookup.get(stripAnsi(outcome.selected));
       if (line) return { kind: "selected", line };
     }
     return { kind: "cancelled" };
