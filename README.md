@@ -34,6 +34,9 @@ cdwt install                  # writes shell function + sources it from ~/.zshrc
 exec zsh -l
 ```
 
+`npm i -g` only installs the `cdwt` executable. Run `cdwt install` once so
+`zsh` loads the shell function that performs the actual `cd`.
+
 ### From source
 
 ```sh
