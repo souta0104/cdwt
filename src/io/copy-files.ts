@@ -1,9 +1,9 @@
 import { cp, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { copyPatternMatchesPath, validateCopyPath } from "../core/copy.js";
+import { copyPatternMatchesPath, patternsToPathspecs, validateCopyPath } from "../core/copy.js";
 import type { CdwtConfig } from "../types.js";
 import type { ConsoleIO } from "./console.js";
-import { isGitIgnored, listIgnoredFiles } from "./git.js";
+import { isGitIgnored, listIgnoredFilesMatching } from "./git.js";
 
 export interface CopyIgnoredOptions {
   source: string;
@@ -47,25 +47,20 @@ export async function copyConfiguredIgnoredPaths(options: CopyIgnoredOptions): P
     return;
   }
 
+  const pathspecs = patternsToPathspecs(config.copyIgnored.patterns);
   const t0Ls = Date.now();
-  const ignored = await listIgnoredFiles(source);
+  const ignored = await listIgnoredFilesMatching(source, pathspecs);
   const lsElapsed = Date.now() - t0Ls;
-  console.debug(`git ls-files returned ${ignored.length} entries in ${lsElapsed}ms`);
+  console.debug(`git ls-files (targeted) returned ${ignored.length} entries in ${lsElapsed}ms`);
 
-  for (const pattern of config.copyIgnored.patterns) {
-    const matches = ignored.filter((f) => copyPatternMatchesPath(f, [pattern]));
-    console.debug(`pattern "${pattern}": ${matches.length} of ${ignored.length} entries matched`);
-  }
+  const matched = ignored.filter((f) => copyPatternMatchesPath(f, config.copyIgnored.patterns));
+  console.debug(`pattern filter: ${matched.length} of ${ignored.length} entries matched`);
 
-  for (const relative of ignored) {
-    if (copyPatternMatchesPath(relative, config.copyIgnored.patterns)) {
-      await copyOneIgnoredPath(source, destination, relative, console, {
-        onTimeIgnored: (ms) => { timeInIsIgnored += ms; },
-        onTimeCp: (ms) => { timeInCp += ms; },
-        onCopied: () => { copiedCount++; },
-        onSkipped: () => { skippedCount++; },
-      });
-    }
+  for (const relative of matched) {
+    await copyOnePath(source, destination, relative, console, {
+      onTimeCp: (ms) => { timeInCp += ms; },
+      onCopied: () => { copiedCount++; },
+    });
   }
 
   const totalElapsed = Date.now() - t0Total;
@@ -120,6 +115,45 @@ async function copyOneIgnoredPath(
   // directory copies. Defaults: force overwrites, errorOnExist false,
   // verbatimSymlinks true (Node 22), which matches `cp -pR` closely enough
   // for our "carry .env / .claude across worktrees" use case.
+  await mkdir(path.dirname(destinationItem), { recursive: true });
+
+  const t0Cp = Date.now();
+  await cp(sourceItem, destinationItem, {
+    recursive: sourceStat.isDirectory(),
+    preserveTimestamps: true,
+    force: true,
+  });
+  const cpElapsed = Date.now() - t0Cp;
+  timers.onTimeCp(cpElapsed);
+  timers.onCopied();
+  console.debug(`copy done ${relative} cp=${cpElapsed}ms`);
+}
+
+interface CopyOneTimers {
+  onTimeCp: (ms: number) => void;
+  onCopied: () => void;
+}
+
+async function copyOnePath(
+  source: string,
+  destination: string,
+  relative: string,
+  console: ConsoleIO,
+  timers: CopyOneTimers,
+): Promise<void> {
+  validateCopyPath(relative);
+  const sourceItem = path.join(source, relative);
+  const destinationItem = path.join(destination, relative);
+
+  const sourceStat = await safeStat(sourceItem);
+  if (!sourceStat) {
+    console.debug(`copy skip (not found): ${relative}`);
+    return;
+  }
+
+  const sizeInfo = sourceStat.isDirectory() ? "dir" : `${sourceStat.size}B`;
+  console.debug(`copy ${relative} (${sizeInfo})`);
+
   await mkdir(path.dirname(destinationItem), { recursive: true });
 
   const t0Cp = Date.now();

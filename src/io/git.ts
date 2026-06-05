@@ -109,13 +109,26 @@ export async function listIgnoredFiles(cwd: string): Promise<string[]> {
   return result.stdout.split("\0").filter((p) => p.length > 0);
 }
 
+export async function listIgnoredFilesMatching(
+  cwd: string,
+  pathspecs: readonly string[],
+): Promise<string[]> {
+  if (pathspecs.length === 0) return [];
+  const result = await runGit(
+    ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...pathspecs],
+    { cwd },
+  );
+  if (result.exitCode !== 0) return [];
+  return result.stdout.split("\0").filter((p) => p.length > 0);
+}
+
 /**
  * For commands that produce useful progress output (worktree add / remove),
  * we let git own the user's terminal. That way the output is identical to
  * `git worktree add` invoked by hand and we never duplicate it.
  */
 async function runGitInherited(args: readonly string[], cwd: string): Promise<number> {
-  const result = await run("git", args, { cwd, inheritStdio: true, onDebug: _gitDebug });
+  const result = await run("git", args, { cwd, inheritStdio: true, ...(_gitDebug && { onDebug: _gitDebug }) });
   return result.exitCode;
 }
 
@@ -162,7 +175,7 @@ export async function removeWorktree(
   cwd: string,
   target: string,
 ): Promise<RemoveWorktreeResult> {
-  const result = await run("git", ["worktree", "remove", target], { cwd, onDebug: _gitDebug });
+  const result = await run("git", ["worktree", "remove", target], { cwd, ...(_gitDebug && { onDebug: _gitDebug }) });
   return { exitCode: result.exitCode, stderr: result.stderr };
 }
 
@@ -176,7 +189,7 @@ export async function removeWorktreeForceRaw(
 ): Promise<RemoveWorktreeResult> {
   const result = await run("git", ["worktree", "remove", "--force", target], {
     cwd,
-    onDebug: _gitDebug,
+    ...(_gitDebug && { onDebug: _gitDebug }),
   });
   return { exitCode: result.exitCode, stderr: result.stderr };
 }
@@ -200,5 +213,5 @@ export async function removeWorktreeForce(
 }
 
 async function runGit(args: readonly string[], options: { cwd: string }) {
-  return run("git", args, { cwd: options.cwd, onDebug: _gitDebug });
+  return run("git", args, { cwd: options.cwd, ...(_gitDebug && { onDebug: _gitDebug }) });
 }
