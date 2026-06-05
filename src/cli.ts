@@ -12,6 +12,7 @@ interface GlobalFlags {
 interface SelectFlags extends GlobalFlags {
   defaultBranch?: boolean;
   pr?: boolean;
+  new?: boolean | string;
   config?: string;
 }
 
@@ -45,6 +46,10 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     .option("--default-branch", "print the path of the default branch worktree and exit")
     .option("--pr", "open the picker pre-filtered to PRs (loads `gh pr list` immediately)")
     .option(
+      "--new [branch]",
+      "create a new worktree from the default branch and cd into it (prompts for name if omitted)",
+    )
+    .option(
       "--config <file>",
       "use only the given settings file (overrides .cdwt/settings.json discovery)",
     )
@@ -54,6 +59,7 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
       state.exitCode = await runSelect({
         defaultBranchOnly: Boolean(opts.defaultBranch),
         prFilter: Boolean(opts.pr),
+        ...(opts.new !== undefined ? { newBranch: opts.new as string | true } : {}),
         cwd: process.cwd(),
         configOverride: opts.config ?? process.env["CDWT_CONFIG"],
         home: selectHome(),

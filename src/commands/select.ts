@@ -30,6 +30,11 @@ export interface SelectOptions {
   defaultBranchOnly: boolean;
   /** Start with the PR filter enabled and PR list pre-fetched. */
   prFilter?: boolean;
+  /**
+   * `true` → prompt for branch name, `string` → use as branch name.
+   * Skips the interactive picker and creates a new worktree directly.
+   */
+  newBranch?: string | true;
   cwd: string;
   configOverride: string | undefined;
   home: string;
@@ -76,6 +81,17 @@ export async function runSelect(options: SelectOptions): Promise<number> {
   console.debug(
     `merged config: patterns=[${config.copyIgnored.patterns.join(",")}] paths=[${config.copyIgnored.paths.join(",")}]`,
   );
+
+  if (options.newBranch !== undefined) {
+    const ctx: ActionContext = {
+      repo,
+      config,
+      branchesWithWorktree: deriveBranchesWithWorktree(repo),
+      console,
+    };
+    const branchArg = options.newBranch === true ? undefined : options.newBranch;
+    return createNewWorktreeAction(ctx, branchArg);
+  }
 
   const localBranches = await listLocalBranches(repo.cwd);
   console.debug(`localBranches=${localBranches.length}`);
