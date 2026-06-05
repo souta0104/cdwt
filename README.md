@@ -18,6 +18,8 @@ Written in TypeScript, distributed as an `npx`-installable CLI plus a small
 
 ## Install
 
+### From npm
+
 Try it once:
 
 ```sh
@@ -27,16 +29,28 @@ npx cdwt --default-branch     # prints the main worktree path
 Install for daily use:
 
 ```sh
-pnpm add -g cdwt              # or: npm i -g cdwt
-cdwt-select install           # writes shell function + sources it from ~/.zshrc
+npm i -g cdwt                 # or: pnpm add -g cdwt
+cdwt install                  # writes shell function + sources it from ~/.zshrc
 exec zsh -l
 ```
 
-`cdwt-select install` writes `~/.local/share/cdwt/cdwt.zsh` and adds
+### From source
+
+```sh
+git clone https://github.com/souta0104/cdworktree.git
+cd cdworktree
+pnpm install
+pnpm build
+pnpm link --global
+cdwt install
+exec zsh -l
+```
+
+`cdwt install` writes `~/.local/share/cdwt/cdwt.zsh` and adds
 `source "$HOME/.local/share/cdwt/cdwt.zsh"` to `~/.zshrc` (skipped if already
 present). The shell function is required because a child process can't change
-the parent shell's directory: `cdwt-select` prints the destination path on
-stdout and the function `cd`s into it.
+the parent shell's directory: `cdwt` prints the destination path on stdout
+and the function `cd`s into it.
 
 ## Usage
 
@@ -166,7 +180,7 @@ tests/                     vitest (pure + integration against a temp git repo)
 ## Uninstall
 
 ```sh
-pnpm remove -g cdwt        # or: npm rm -g cdwt
+npm rm -g cdwt                # or: pnpm remove -g cdwt
 rm -f ~/.local/share/cdwt/cdwt.zsh
 ```
 

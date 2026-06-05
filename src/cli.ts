@@ -33,10 +33,10 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
   const state = { exitCode: 0 };
 
   program
-    .name("cdwt-select")
+    .name("cdwt")
     .description(
       "Interactive git worktree switcher. Prints the destination path on stdout; " +
-        "use the bundled zsh wrapper (installed via `cdwt-select install`) so the " +
+        "use the bundled zsh wrapper (installed via `cdwt install`) so the " +
         "shell can `cd` into it.",
     )
     .version("0.1.0")

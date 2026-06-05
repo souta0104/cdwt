@@ -5,7 +5,7 @@ import {
   type FzfRunner,
 } from "../src/ui/selector.js";
 import { TestConsole } from "../src/io/test-console.js";
-import { renderLine } from "../src/ui/format.js";
+import { renderLine, stripAnsi } from "../src/ui/format.js";
 import type { DisplayLine } from "../src/types.js";
 
 function dl(overrides: Partial<DisplayLine>): DisplayLine {
@@ -119,6 +119,21 @@ describe("selectInteractive fzf path (with injected runner)", () => {
     if (result.kind === "selected") expect(result.line.destination).toBe("/repo-feature");
   });
 
+  it("matches the selected line when fzf strips ANSI codes from stdout", async () => {
+    const console = new TestConsole();
+    const runFzf: FzfRunner = () => {
+      const stripped = stripAnsi(renderLine(WT_FEATURE));
+      return Promise.resolve({ exitCode: 0, stdout: `\n\n${stripped}\n` });
+    };
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    expect(result.kind).toBe("selected");
+    if (result.kind === "selected") expect(result.line.destination).toBe("/repo-feature");
+  });
+
   it("returns cancelled when fzf exits non-zero with empty stdout (esc/abort)", async () => {
     const console = new TestConsole();
     const runFzf: FzfRunner = () => Promise.resolve({ exitCode: 130, stdout: "" });
@@ -165,6 +180,19 @@ describe("selectInteractive fzf path (with injected runner)", () => {
     const console = new TestConsole();
     const runFzf: FzfRunner = () =>
       Promise.resolve({ exitCode: 0, stdout: `\nctrl-d\n${renderLine(WT_FEATURE)}\n` });
+    const result = await selectInteractive([MAIN, WT_FEATURE], {
+      console,
+      useFzf: true,
+      fzfRunner: runFzf,
+    });
+    expect(result.kind).toBe("delete-target");
+    if (result.kind === "delete-target") expect(result.line.destination).toBe("/repo-feature");
+  });
+
+  it("returns delete-target when ctrl-d output has ANSI stripped", async () => {
+    const console = new TestConsole();
+    const runFzf: FzfRunner = () =>
+      Promise.resolve({ exitCode: 0, stdout: `\nctrl-d\n${stripAnsi(renderLine(WT_FEATURE))}\n` });
     const result = await selectInteractive([MAIN, WT_FEATURE], {
       console,
       useFzf: true,

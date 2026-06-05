@@ -108,7 +108,7 @@ describe("--default-branch CLI", () => {
 
 describe("inheritStdio keeps the parent's stdout clean", () => {
   // Regression test for the shell-wrapper hang. The wrapper does
-  //   destination="$(cdwt-select)"
+  //   destination="$(command cdwt)"
   // so anything that escapes to the child's stdout other than the destination
   // path corrupts the cd target. `git worktree add` writes "HEAD is now at ..."
   // to stdout, and `inheritStdio: true` used to forward that into the parent's

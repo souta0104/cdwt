@@ -12,7 +12,7 @@ export interface RunOptions {
   /**
    * When true, child stdio inherits the parent's terminal (for git worktree, gh checkout, ...).
    * The child's stdout is redirected to the parent's stderr so the wrapper's
-   * `destination=$(cdwt-select)` capture stays clean — git writes "HEAD is now at ..." to
+   * `destination=$(command cdwt)` capture stays clean — git writes "HEAD is now at ..." to
    * stdout and would otherwise pollute the destination path. The user still sees the
    * message because parent stderr is the terminal.
    */

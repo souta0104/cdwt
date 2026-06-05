@@ -24,7 +24,7 @@ describe("runInstall", () => {
     const wrapperPath = path.join(home, ".local", "share", "cdwt", "cdwt.zsh");
     const contents = await readFile(wrapperPath, "utf8");
     expect(contents).toContain("cdwt() {");
-    expect(contents).toContain("cdwt-select");
+    expect(contents).toContain("command cdwt");
     const mode = (await stat(wrapperPath)).mode & 0o777;
     expect(mode).toBe(0o644);
   });
