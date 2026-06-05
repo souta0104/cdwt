@@ -153,6 +153,55 @@ describe("runSelect delete flow (d <num>)", () => {
   });
 });
 
+describe("runSelect --new", () => {
+  it("creates a worktree with the given branch name and exits 0", async () => {
+    const console = new TestConsole();
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      newBranch: "feat-x",
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+    expect(code).toBe(0);
+    const expected = path.join(workdir, "repo-feat-x");
+    expect(console.stdout.trim()).toBe(expected);
+    expect((await stat(expected)).isDirectory()).toBe(true);
+  });
+
+  it("prompts for a branch name when --new is used without argument", async () => {
+    const console = new TestConsole();
+    console.queueResponses("prompted-branch");
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      newBranch: true,
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+    expect(code).toBe(0);
+    const expected = path.join(workdir, "repo-prompted-branch");
+    expect(console.stdout.trim()).toBe(expected);
+    expect((await stat(expected)).isDirectory()).toBe(true);
+  });
+
+  it("exits with EXIT_CANCELLED when the user cancels the branch prompt", async () => {
+    const console = new TestConsole();
+    // No queued responses → ask() returns null → cancelled
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      newBranch: true,
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+    expect(code).toBe(130);
+  });
+});
+
 function exec(cwd: string, command: string, args: string[]): void {
   execFileSync(command, args, { cwd, stdio: "pipe" });
 }
