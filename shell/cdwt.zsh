@@ -8,7 +8,7 @@ cdwt() {
       ;;
   esac
 
-  if ! destination="$(command cdwt "$@")"; then
+  if ! destination="$(CDWT_SHELL_WRAPPER=1 command cdwt "$@")"; then
     return $?
   fi
 
