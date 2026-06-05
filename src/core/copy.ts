@@ -24,6 +24,25 @@ export function validateCopyPath(relativePath: string): void {
 }
 
 /**
+ * Convert user-facing copy patterns into git pathspecs suitable for
+ * `git ls-files --others --ignored --exclude-standard -- <pathspecs>`.
+ *
+ * The result intentionally over-matches — callers should apply
+ * `copyPatternMatchesPath` as a secondary filter to enforce exact semantics.
+ */
+export function patternsToPathspecs(patterns: readonly string[]): string[] {
+  const specs: string[] = [];
+  for (const p of patterns) {
+    if (p.includes("/")) {
+      specs.push(`:(glob)${p}`);
+    } else {
+      specs.push(`:(glob)**/${p}`);
+    }
+  }
+  return specs;
+}
+
+/**
  * Glob-ish pattern matcher that mirrors the bash `copy_pattern_matches_path` rules:
  * - patterns containing `/` are matched as full repo-relative paths via fnmatch
  * - patterns without `/` match the basename anywhere in the path, the path itself,

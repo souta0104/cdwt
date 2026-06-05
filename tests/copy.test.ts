@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UnsafeCopyPathError, copyPatternMatchesPath, validateCopyPath } from "../src/core/copy.js";
+import { UnsafeCopyPathError, copyPatternMatchesPath, patternsToPathspecs, validateCopyPath } from "../src/core/copy.js";
 
 describe("validateCopyPath", () => {
   it.each(["", "/abs/path", "../escape", "..", "nested/../escape", "a/../b"])(
@@ -48,5 +48,31 @@ describe("copyPatternMatchesPath", () => {
 
   it("rejects unsafe patterns by throwing", () => {
     expect(() => copyPatternMatchesPath("a", ["../bad"])).toThrow(UnsafeCopyPathError);
+  });
+});
+
+describe("patternsToPathspecs", () => {
+  it("wraps basename-only patterns with :(glob)**/", () => {
+    expect(patternsToPathspecs([".claude", "CLAUDE.md"])).toEqual([
+      ":(glob)**/.claude",
+      ":(glob)**/CLAUDE.md",
+    ]);
+  });
+
+  it("wraps patterns containing / with :(glob) only", () => {
+    expect(patternsToPathspecs([".codex/skills/**"])).toEqual([
+      ":(glob).codex/skills/**",
+    ]);
+  });
+
+  it("handles mixed patterns", () => {
+    expect(patternsToPathspecs(["*.local.json", ".claude/**"])).toEqual([
+      ":(glob)**/*.local.json",
+      ":(glob).claude/**",
+    ]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(patternsToPathspecs([])).toEqual([]);
   });
 });
