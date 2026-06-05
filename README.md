@@ -45,8 +45,8 @@ exec zsh -l
 ### From source
 
 ```sh
-git clone https://github.com/souta0104/cdworktree.git
-cd cdworktree
+git clone https://github.com/souta0104/cdwt.git
+cd cdwt
 pnpm install
 pnpm build
 pnpm link --global
