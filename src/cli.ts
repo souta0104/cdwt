@@ -11,7 +11,7 @@ interface GlobalFlags {
 
 interface SelectFlags extends GlobalFlags {
   defaultBranch?: boolean;
-  pr?: boolean;
+  pr?: boolean | string;
   new?: boolean | string;
   config?: string;
 }
@@ -44,7 +44,11 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
 
   program
     .option("--default-branch", "print the path of the default branch worktree and exit")
-    .option("--pr", "open the picker pre-filtered to PRs (loads `gh pr list` immediately)")
+    .option(
+      "--pr [number]",
+      "with a number, cd directly into that PR's worktree (creating it if needed); " +
+        "without a number, open the picker pre-filtered to PRs",
+    )
     .option(
       "--new [branch]",
       "create a new worktree from the default branch and cd into it (prompts for name if omitted)",
@@ -56,9 +60,11 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     .action(async (opts: SelectFlags) => {
       const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
       const console = consoleFactory(verbose);
+      const prNumber = parsePrNumber(opts.pr);
       state.exitCode = await runSelect({
         defaultBranchOnly: Boolean(opts.defaultBranch),
-        prFilter: Boolean(opts.pr),
+        prFilter: opts.pr === true,
+        ...(prNumber !== undefined ? { prNumber } : {}),
         ...(opts.new !== undefined ? { newBranch: opts.new as string | true } : {}),
         cwd: process.cwd(),
         configOverride: opts.config ?? process.env["CDWT_CONFIG"],
@@ -82,6 +88,18 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     });
 
   return { program, state };
+}
+
+/**
+ * Resolve the `--pr` value into a PR number. `true` (flag without value) and
+ * `undefined` mean "no direct PR jump". A string must be a positive integer.
+ */
+function parsePrNumber(pr: boolean | string | undefined): number | undefined {
+  if (typeof pr !== "string") return undefined;
+  if (!/^\d+$/.test(pr)) {
+    throw new CdwtError(`invalid PR number: ${pr}`);
+  }
+  return Number.parseInt(pr, 10);
 }
 
 async function main(): Promise<number> {

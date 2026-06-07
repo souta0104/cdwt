@@ -202,6 +202,27 @@ describe("runSelect --new", () => {
   });
 });
 
+describe("runSelect --pr <number>", () => {
+  it("cd's into an existing PR worktree without prompting or creating", async () => {
+    const target = path.join(workdir, "repo-pr-7");
+    exec(repoDir, "git", ["worktree", "add", "--detach", target]);
+
+    const console = new TestConsole();
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      prNumber: 7,
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+
+    expect(code).toBe(0);
+    expect(console.stdout.trim()).toBe(target);
+    expect(console.askedPrompts).toEqual([]);
+  });
+});
+
 function exec(cwd: string, command: string, args: string[]): void {
   execFileSync(command, args, { cwd, stdio: "pipe" });
 }

@@ -16,6 +16,7 @@ import {
   createPrWorktreeAction,
   createWorktreeForBranchAction,
   deleteWorktreeAction,
+  goToPrWorktreeAction,
   printDestination,
   type ActionContext,
 } from "./actions.js";
@@ -30,6 +31,11 @@ export interface SelectOptions {
   defaultBranchOnly: boolean;
   /** Start with the PR filter enabled and PR list pre-fetched. */
   prFilter?: boolean;
+  /**
+   * Jump directly to the worktree for this PR number, skipping the picker.
+   * `cd`s into `<repo>-pr-<number>` if it exists, otherwise creates it.
+   */
+  prNumber?: number;
   /**
    * `true` → prompt for branch name, `string` → use as branch name.
    * Skips the interactive picker and creates a new worktree directly.
@@ -91,6 +97,16 @@ export async function runSelect(options: SelectOptions): Promise<number> {
     };
     const branchArg = options.newBranch === true ? undefined : options.newBranch;
     return createNewWorktreeAction(ctx, branchArg);
+  }
+
+  if (options.prNumber !== undefined) {
+    const ctx: ActionContext = {
+      repo,
+      config,
+      branchesWithWorktree: deriveBranchesWithWorktree(repo),
+      console,
+    };
+    return goToPrWorktreeAction(ctx, options.prNumber);
   }
 
   const localBranches = await listLocalBranches(repo.cwd);
