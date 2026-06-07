@@ -16,6 +16,7 @@ import {
   createPrWorktreeAction,
   createWorktreeForBranchAction,
   deleteWorktreeAction,
+  goToPrWorktreeAction,
   printDestination,
   type ActionContext,
 } from "./actions.js";
@@ -31,10 +32,20 @@ export interface SelectOptions {
   /** Start with the PR filter enabled and PR list pre-fetched. */
   prFilter?: boolean;
   /**
+   * Jump directly to the worktree for this PR number, skipping the picker.
+   * `cd`s into `<repo>-pr-<number>` if it exists, otherwise creates it.
+   */
+  prNumber?: number;
+  /**
    * `true` → prompt for branch name, `string` → use as branch name.
    * Skips the interactive picker and creates a new worktree directly.
    */
   newBranch?: string | true;
+  /**
+   * Delete the worktree matching this branch name or absolute path, skipping
+   * the picker. Prompts for confirmation; refuses the main worktree.
+   */
+  rmTarget?: string;
   cwd: string;
   configOverride: string | undefined;
   home: string;
@@ -91,6 +102,26 @@ export async function runSelect(options: SelectOptions): Promise<number> {
     };
     const branchArg = options.newBranch === true ? undefined : options.newBranch;
     return createNewWorktreeAction(ctx, branchArg);
+  }
+
+  if (options.prNumber !== undefined) {
+    const ctx: ActionContext = {
+      repo,
+      config,
+      branchesWithWorktree: deriveBranchesWithWorktree(repo),
+      console,
+    };
+    return goToPrWorktreeAction(ctx, options.prNumber);
+  }
+
+  if (options.rmTarget !== undefined) {
+    const ctx: ActionContext = {
+      repo,
+      config,
+      branchesWithWorktree: deriveBranchesWithWorktree(repo),
+      console,
+    };
+    return removeWorktreeByTarget(ctx, options.rmTarget);
   }
 
   const localBranches = await listLocalBranches(repo.cwd);
@@ -238,6 +269,22 @@ function makeCommandHost(
  * picker re-opens. After a successful delete, refresh state and return to the
  * picker — except when no worktree is left, in which case jump to main.
  */
+/**
+ * Resolve `target` (a branch name or absolute worktree path) to a worktree and
+ * delete it directly, then `cd` to the main worktree. `deleteWorktreeAction`
+ * refuses the main worktree and prompts before removing anything.
+ */
+async function removeWorktreeByTarget(ctx: ActionContext, target: string): Promise<number> {
+  const match = ctx.repo.worktrees.find((wt) => wt.path === target || wt.branch === target);
+  if (!match) {
+    throw new CdwtError(`no worktree found for "${target}"`);
+  }
+  const result = await deleteWorktreeAction(ctx, match.path);
+  if (result.kind === "cancelled") return EXIT_CANCELLED;
+  printDestination(ctx.console, ctx.repo.mainWorktree);
+  return 0;
+}
+
 async function handleDeleteTarget(
   state: State,
   ctx: ActionContext,

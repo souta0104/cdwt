@@ -7,19 +7,11 @@ import { createDefaultConsole, type ConsoleIO } from "./io/console.js";
 
 interface GlobalFlags {
   verbose?: boolean;
-}
-
-interface SelectFlags extends GlobalFlags {
-  pr?: boolean;
   config?: string;
 }
 
 interface InstallFlags extends GlobalFlags {
   rc?: string;
-}
-
-interface NewFlags extends GlobalFlags {
-  config?: string;
 }
 
 /**
@@ -42,37 +34,35 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
         "shell can `cd` into it.",
     )
     .version("0.1.0")
-    .option("-v, --verbose", "write timestamped diagnostic logs to stderr");
-
-  program
-    .option("--pr", "open the picker pre-filtered to PRs (loads `gh pr list` immediately)")
+    .option("-v, --verbose", "write timestamped diagnostic logs to stderr")
     .option(
       "--config <file>",
       "use only the given settings file (overrides .cdwt/settings.json discovery)",
-    )
-    .action(async (opts: SelectFlags) => {
-      const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
-      const console = consoleFactory(verbose);
-      state.exitCode = await runSelect({
-        defaultBranchOnly: false,
-        prFilter: Boolean(opts.pr),
-        cwd: process.cwd(),
-        configOverride: opts.config ?? process.env["CDWT_CONFIG"],
-        home: selectHome(),
-        console,
-      });
+    );
+
+  const globals = (): GlobalFlags => program.opts<GlobalFlags>();
+  const configOverride = (): string | undefined => globals().config ?? process.env["CDWT_CONFIG"];
+
+  program.action(async () => {
+    const console = consoleFactory(Boolean(globals().verbose));
+    state.exitCode = await runSelect({
+      defaultBranchOnly: false,
+      cwd: process.cwd(),
+      configOverride: configOverride(),
+      home: selectHome(),
+      console,
     });
+  });
 
   program
     .command("root")
     .description("print the path of the default branch worktree and exit")
     .action(async () => {
-      const verbose = Boolean(program.opts<GlobalFlags>().verbose);
-      const console = consoleFactory(verbose);
+      const console = consoleFactory(Boolean(globals().verbose));
       state.exitCode = await runSelect({
         defaultBranchOnly: true,
         cwd: process.cwd(),
-        configOverride: process.env["CDWT_CONFIG"],
+        configOverride: configOverride(),
         home: selectHome(),
         console,
       });
@@ -82,18 +72,53 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     .command("new")
     .description("create a new worktree from the default branch and cd into it")
     .argument("[branch]", "branch name (prompts when omitted)")
-    .option(
-      "--config <file>",
-      "use only the given settings file (overrides .cdwt/settings.json discovery)",
-    )
-    .action(async (branch: string | undefined, opts: NewFlags) => {
-      const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
-      const console = consoleFactory(verbose);
+    .action(async (branch: string | undefined) => {
+      const console = consoleFactory(Boolean(globals().verbose));
       state.exitCode = await runSelect({
         defaultBranchOnly: false,
         newBranch: branch ?? true,
         cwd: process.cwd(),
-        configOverride: opts.config ?? process.env["CDWT_CONFIG"],
+        configOverride: configOverride(),
+        home: selectHome(),
+        console,
+      });
+    });
+
+  program
+    .command("pr")
+    .description(
+      "with a number, cd directly into that PR's worktree (creating it if needed); " +
+        "without a number, open the picker pre-filtered to PRs",
+    )
+    .argument("[number]", "PR number (opens the PR-filtered picker when omitted)")
+    .action(async (number: string | undefined) => {
+      const console = consoleFactory(Boolean(globals().verbose));
+      const prNumber = parsePrNumber(number);
+      state.exitCode = await runSelect({
+        defaultBranchOnly: false,
+        prFilter: prNumber === undefined,
+        ...(prNumber !== undefined ? { prNumber } : {}),
+        cwd: process.cwd(),
+        configOverride: configOverride(),
+        home: selectHome(),
+        console,
+      });
+    });
+
+  program
+    .command("rm")
+    .description(
+      "delete the worktree for the given branch or path (prompts for confirmation); " +
+        "opens the picker when omitted",
+    )
+    .argument("[target]", "branch name or worktree path (opens the picker when omitted)")
+    .action(async (target: string | undefined) => {
+      const console = consoleFactory(Boolean(globals().verbose));
+      state.exitCode = await runSelect({
+        defaultBranchOnly: false,
+        ...(target !== undefined ? { rmTarget: target } : {}),
+        cwd: process.cwd(),
+        configOverride: configOverride(),
         home: selectHome(),
         console,
       });
@@ -104,8 +129,7 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     .description("install the zsh shell wrapper to ~/.local/share/cdwt and update ~/.zshrc")
     .option("--rc <file>", "rc file to update (default: $HOME/.zshrc)")
     .action(async (opts: InstallFlags) => {
-      const verbose = Boolean(opts.verbose ?? program.opts<GlobalFlags>().verbose);
-      const console = consoleFactory(verbose);
+      const console = consoleFactory(Boolean(globals().verbose));
       state.exitCode = await runInstall({
         home: installHome(),
         rcFile: opts.rc,
@@ -114,6 +138,18 @@ export function buildProgram(consoleFactory: (verbose: boolean) => ConsoleIO): {
     });
 
   return { program, state };
+}
+
+/**
+ * Resolve the `pr` argument into a PR number. `undefined` (no argument) means
+ * "open the PR-filtered picker". A value must be a positive integer.
+ */
+function parsePrNumber(pr: string | undefined): number | undefined {
+  if (pr === undefined) return undefined;
+  if (!/^\d+$/.test(pr)) {
+    throw new CdwtError(`invalid PR number: ${pr}`);
+  }
+  return Number.parseInt(pr, 10);
 }
 
 async function main(): Promise<number> {

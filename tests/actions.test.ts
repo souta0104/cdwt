@@ -8,12 +8,14 @@ import {
   createNewWorktreeAction,
   createWorktreeForBranchAction,
   deleteWorktreeAction,
+  goToPrWorktreeAction,
   printDestination,
   type ActionContext,
 } from "../src/commands/actions.js";
 import { TestConsole } from "../src/io/test-console.js";
 import { loadRepoContext } from "../src/io/repo-context.js";
 import { deriveBranchesWithWorktree } from "../src/core/sections.js";
+import { makePrPath } from "../src/core/paths.js";
 
 let workdir: string;
 let repoDir: string;
@@ -237,6 +239,18 @@ describe("createNewWorktreeAction", () => {
     const code = await createNewWorktreeAction(ctx, "exists");
     expect(code).toBe(EXIT_CANCELLED);
     expect(console.stderr).toContain("branch already exists: exists");
+  });
+});
+
+describe("goToPrWorktreeAction", () => {
+  it("prints the existing PR worktree path without creating it", async () => {
+    const { ctx, console } = await makeContext();
+    const target = makePrPath(42, ctx.repo.mainWorktree, ctx.repo.repoName);
+    await mkdir(target, { recursive: true });
+    const code = await goToPrWorktreeAction(ctx, 42);
+    expect(code).toBe(0);
+    expect(console.stdout.trim()).toBe(target);
+    expect(console.askedPrompts).toEqual([]);
   });
 });
 

@@ -14,7 +14,7 @@ import {
 import { checkoutPr } from "../io/gh.js";
 import type { ConsoleIO } from "../io/console.js";
 import type { CdwtConfig, RepoContext } from "../types.js";
-import { makeBranchPath } from "../core/paths.js";
+import { makeBranchPath, makePrPath } from "../core/paths.js";
 
 export const EXIT_CANCELLED = 130;
 const MAX_BRANCH_PROMPT_RETRIES = 5;
@@ -132,6 +132,23 @@ export async function createNewWorktreeAction(
   return 0;
 }
 
+/**
+ * Jump straight to a PR's worktree. If `<repo>-pr-<number>` already exists,
+ * just print it so the shell can `cd`; otherwise create it via the detached
+ * worktree + `gh pr checkout` flow.
+ */
+export async function goToPrWorktreeAction(
+  ctx: ActionContext,
+  prNumber: number,
+): Promise<number> {
+  const target = makePrPath(prNumber, ctx.repo.mainWorktree, ctx.repo.repoName);
+  if (await pathExists(target)) {
+    printDestination(ctx.console, target);
+    return 0;
+  }
+  return createPrWorktreeAction(ctx, prNumber, target);
+}
+
 export async function createPrWorktreeAction(
   ctx: ActionContext,
   prNumber: number,
@@ -185,11 +202,17 @@ async function readNewBranchName(ctx: ActionContext): Promise<string | null> {
   return null;
 }
 
-async function assertDestinationFree(target: string): Promise<void> {
+async function pathExists(target: string): Promise<boolean> {
   try {
     await stat(target);
+    return true;
   } catch {
-    return;
+    return false;
   }
-  throw new CdwtError(`destination already exists: ${target}`);
+}
+
+async function assertDestinationFree(target: string): Promise<void> {
+  if (await pathExists(target)) {
+    throw new CdwtError(`destination already exists: ${target}`);
+  }
 }
