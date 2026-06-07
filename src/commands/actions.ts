@@ -31,6 +31,17 @@ export type DeleteOutcome = { kind: "deleted" } | { kind: "cancelled" };
 /** Print the destination path so the shell wrapper can `cd` into it. */
 export function printDestination(console: ConsoleIO, target: string): void {
   console.outln(target);
+  warnIfShellWrapperMissing(console);
+}
+
+function warnIfShellWrapperMissing(console: ConsoleIO): void {
+  const stdoutIsTty = Boolean((process.stdout as { isTTY?: boolean }).isTTY);
+  if (!stdoutIsTty || process.env["CDWT_SHELL_WRAPPER"] === "1") return;
+
+  console.errln(
+    "cdwt: shell integration is not loaded, so this command printed the destination path only.",
+  );
+  console.errln("cdwt: run `cdwt install`, then `source ~/.zshrc` or restart your shell.");
 }
 
 export async function deleteWorktreeAction(

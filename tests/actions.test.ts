@@ -60,6 +60,37 @@ describe("printDestination", () => {
     expect(console.stdout).toBe("/some/path\n");
     expect(console.stderr).toBe("");
   });
+
+  it("warns when called directly from a terminal without the shell wrapper", () => {
+    const console = new TestConsole();
+    withStdoutTty(true, () => {
+      const previous = process.env["CDWT_SHELL_WRAPPER"];
+      delete process.env["CDWT_SHELL_WRAPPER"];
+      try {
+        printDestination(console, "/some/path");
+      } finally {
+        restoreEnv("CDWT_SHELL_WRAPPER", previous);
+      }
+    });
+    expect(console.stdout).toBe("/some/path\n");
+    expect(console.stderr).toContain("shell integration is not loaded");
+    expect(console.stderr).toContain("cdwt install");
+  });
+
+  it("does not warn when called through the shell wrapper", () => {
+    const console = new TestConsole();
+    withStdoutTty(true, () => {
+      const previous = process.env["CDWT_SHELL_WRAPPER"];
+      process.env["CDWT_SHELL_WRAPPER"] = "1";
+      try {
+        printDestination(console, "/some/path");
+      } finally {
+        restoreEnv("CDWT_SHELL_WRAPPER", previous);
+      }
+    });
+    expect(console.stdout).toBe("/some/path\n");
+    expect(console.stderr).toBe("");
+  });
 });
 
 describe("createWorktreeForBranchAction", () => {
@@ -225,4 +256,26 @@ describe("goToPrWorktreeAction", () => {
 
 function exec(cwd: string, command: string, args: string[]): void {
   execFileSync(command, args, { cwd, stdio: "pipe" });
+}
+
+function withStdoutTty(value: boolean, callback: () => void): void {
+  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
+  try {
+    callback();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(process.stdout, "isTTY", descriptor);
+    } else {
+      delete (process.stdout as { isTTY?: boolean }).isTTY;
+    }
+  }
+}
+
+function restoreEnv(name: string, previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = previous;
+  }
 }

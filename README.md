@@ -23,8 +23,13 @@ Written in TypeScript, distributed as an `npx`-installable CLI plus a small
 Try it once:
 
 ```sh
-npx @soprog_/cdwt --default-branch
+npx @soprog_/cdwt root
+npx @soprog_/cdwt new feature/awesome
+npx @soprog_/cdwt
 ```
+
+Without the shell wrapper, `npx` prints the destination path instead of
+changing your current shell directory.
 
 Install for daily use:
 
@@ -34,11 +39,14 @@ cdwt install                  # writes shell function + sources it from ~/.zshrc
 exec zsh -l
 ```
 
+`npm i -g` only installs the `cdwt` executable. Run `cdwt install` once so
+`zsh` loads the shell function that performs the actual `cd`.
+
 ### From source
 
 ```sh
-git clone https://github.com/souta0104/cdworktree.git
-cd cdworktree
+git clone https://github.com/souta0104/cdwt.git
+cd cdwt
 pnpm install
 pnpm build
 pnpm link --global
@@ -75,13 +83,14 @@ section also has its own color so worktrees and branches are visually distinct.
 a `[worktree]` row deletes that worktree (with a confirmation prompt).
 
 ```sh
-cdwt --default-branch         # skip the picker, jump to the main worktree
+cdwt root                     # skip the picker, jump to the main worktree
+cdwt new feature/awesome      # create a new worktree from the default branch
 cdwt --pr 42                  # skip the picker, cd into PR #42's worktree
 cdwt --pr                     # open the picker pre-filtered to PRs
 cdwt -h                       # show help (bypasses the shell wrapper)
 ```
 
-`--default-branch` jumps to the main worktree (the one that holds the
+`cdwt root` jumps to the main worktree (the one that holds the
 non-bare `.git` directory), not literally to a worktree of `origin/HEAD`.
 In a typical setup these are the same; if you've checked out a different
 branch in the main worktree, that's what you'll land on.
@@ -168,7 +177,7 @@ pnpm typecheck       # tsc --noEmit
 pnpm lint            # eslint
 pnpm format          # prettier --write .
 pnpm build           # tsup → dist/cli.js
-pnpm dev -- --default-branch
+pnpm dev -- root
 ```
 
 Layout:

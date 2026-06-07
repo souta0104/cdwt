@@ -1,11 +1,11 @@
 {
   "name": "@soprog_/cdwt",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Interactive git worktree switcher with fzf integration",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/souta0104/cdworktree.git"
+    "url": "git+https://github.com/souta0104/cdwt.git"
   },
   "publishConfig": {
     "access": "public"
