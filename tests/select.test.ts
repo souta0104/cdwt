@@ -223,6 +223,97 @@ describe("runSelect --pr <number>", () => {
   });
 });
 
+describe("runSelect rmTarget", () => {
+  it("deletes the worktree matching the branch name and cd's to mainWorktree", async () => {
+    const wt = path.join(workdir, "repo-gone");
+    exec(repoDir, "git", ["worktree", "add", "-b", "gone", wt]);
+
+    const console = new TestConsole();
+    console.queueResponses("y");
+
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      rmTarget: "gone",
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+
+    expect(code).toBe(0);
+    expect(console.stdout.trim()).toBe(repoDir);
+    await expect(stat(wt)).rejects.toThrow();
+  });
+
+  it("deletes the worktree matching its absolute path", async () => {
+    const wt = path.join(workdir, "repo-bypath");
+    exec(repoDir, "git", ["worktree", "add", "-b", "bypath", wt]);
+
+    const console = new TestConsole();
+    console.queueResponses("y");
+
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      rmTarget: wt,
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+
+    expect(code).toBe(0);
+    await expect(stat(wt)).rejects.toThrow();
+  });
+
+  it("leaves the worktree in place when the user declines the confirm", async () => {
+    const wt = path.join(workdir, "repo-keep2");
+    exec(repoDir, "git", ["worktree", "add", "-b", "keep2", wt]);
+
+    const console = new TestConsole();
+    console.queueResponses("n");
+
+    const code = await runSelect({
+      defaultBranchOnly: false,
+      rmTarget: "keep2",
+      cwd: repoDir,
+      configOverride: undefined,
+      home,
+      console,
+    });
+
+    expect(code).toBe(130);
+    expect((await stat(wt)).isDirectory()).toBe(true);
+  });
+
+  it("throws when no worktree matches the target", async () => {
+    const console = new TestConsole();
+    await expect(
+      runSelect({
+        defaultBranchOnly: false,
+        rmTarget: "nope",
+        cwd: repoDir,
+        configOverride: undefined,
+        home,
+        console,
+      }),
+    ).rejects.toThrow(/no worktree/i);
+  });
+
+  it("refuses to delete the main worktree", async () => {
+    const console = new TestConsole();
+    await expect(
+      runSelect({
+        defaultBranchOnly: false,
+        rmTarget: "main",
+        cwd: repoDir,
+        configOverride: undefined,
+        home,
+        console,
+      }),
+    ).rejects.toThrow(/refusing to delete the default branch worktree/i);
+  });
+});
+
 function exec(cwd: string, command: string, args: string[]): void {
   execFileSync(command, args, { cwd, stdio: "pipe" });
 }

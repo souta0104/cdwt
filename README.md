@@ -85,8 +85,9 @@ a `[worktree]` row deletes that worktree (with a confirmation prompt).
 ```sh
 cdwt root                     # skip the picker, jump to the main worktree
 cdwt new feature/awesome      # create a new worktree from the default branch
-cdwt --pr 42                  # skip the picker, cd into PR #42's worktree
-cdwt --pr                     # open the picker pre-filtered to PRs
+cdwt pr 42                    # skip the picker, cd into PR #42's worktree
+cdwt pr                       # open the picker pre-filtered to PRs
+cdwt rm feature/awesome       # delete the worktree for that branch
 cdwt -h                       # show help (bypasses the shell wrapper)
 ```
 
@@ -95,10 +96,14 @@ non-bare `.git` directory), not literally to a worktree of `origin/HEAD`.
 In a typical setup these are the same; if you've checked out a different
 branch in the main worktree, that's what you'll land on.
 
-`--pr <number>` skips the picker: it `cd`s into `<repo-parent>/<repo-name>-pr-<number>`
+`cdwt pr <number>` skips the picker: it `cd`s into `<repo-parent>/<repo-name>-pr-<number>`
 if it already exists, otherwise it creates that worktree and runs
-`gh pr checkout <number>` inside it. Without a number, `--pr` opens the picker
+`gh pr checkout <number>` inside it. Without a number, `cdwt pr` opens the picker
 pre-filtered to PRs.
+
+`cdwt rm <target>` deletes the worktree matching that branch name or path,
+prompting for confirmation and refusing the main worktree. Without a target it
+opens the picker, where `ctrl-d` deletes the highlighted worktree.
 
 ### New worktree paths
 
