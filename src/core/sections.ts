@@ -180,7 +180,7 @@ function worktreeLabel(wt: Worktree, currentPath: string): string {
  * default branch should still create a fresh `repo-pr-<n>` directory rather
  * than overwrite the main worktree with a detached checkout.
  */
-function findNonMainWorktreePathForBranch(
+export function findNonMainWorktreePathForBranch(
   worktrees: readonly Worktree[],
   branch: string,
   mainWorktree: string,

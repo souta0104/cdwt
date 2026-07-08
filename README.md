@@ -97,9 +97,10 @@ In a typical setup these are the same; if you've checked out a different
 branch in the main worktree, that's what you'll land on.
 
 `cdwt pr <number>` skips the picker: it `cd`s into `<repo-parent>/<repo-name>-pr-<number>`
-if it already exists, otherwise it creates that worktree and runs
-`gh pr checkout <number>` inside it. Without a number, `cdwt pr` opens the picker
-pre-filtered to PRs.
+if it already exists. Otherwise, if that PR's branch already has a worktree elsewhere,
+it `cd`s there instead of creating a duplicate. Only when neither exists does it create
+`<repo-parent>/<repo-name>-pr-<number>` and run `gh pr checkout <number>` inside it.
+Without a number, `cdwt pr` opens the picker pre-filtered to PRs.
 
 `cdwt rm <target>` deletes the worktree matching that branch name or path,
 prompting for confirmation and refusing the main worktree. Without a target it

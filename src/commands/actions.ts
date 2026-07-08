@@ -11,10 +11,11 @@ import {
   removeWorktreeForce,
   removeWorktreeForceRaw,
 } from "../io/git.js";
-import { checkoutPr } from "../io/gh.js";
+import { checkoutPr, getPrHeadBranch } from "../io/gh.js";
 import type { ConsoleIO } from "../io/console.js";
 import type { CdwtConfig, RepoContext } from "../types.js";
 import { makeBranchPath, makePrPath } from "../core/paths.js";
+import { findNonMainWorktreePathForBranch } from "../core/sections.js";
 
 export const EXIT_CANCELLED = 130;
 const MAX_BRANCH_PROMPT_RETRIES = 5;
@@ -134,8 +135,11 @@ export async function createNewWorktreeAction(
 
 /**
  * Jump straight to a PR's worktree. If `<repo>-pr-<number>` already exists,
- * just print it so the shell can `cd`; otherwise create it via the detached
- * worktree + `gh pr checkout` flow.
+ * just print it so the shell can `cd`. Otherwise, resolve the PR's head
+ * branch via `gh pr view` and redirect to an existing worktree for that
+ * branch if one exists elsewhere, instead of creating a duplicate. Only when
+ * neither exists (or the branch can't be resolved) does it fall back to the
+ * detached worktree + `gh pr checkout` flow.
  */
 export async function goToPrWorktreeAction(
   ctx: ActionContext,
@@ -146,6 +150,20 @@ export async function goToPrWorktreeAction(
     printDestination(ctx.console, target);
     return 0;
   }
+
+  const branch = await getPrHeadBranch(ctx.repo.cwd, prNumber);
+  if (branch !== null) {
+    const existingWorktreePath = findNonMainWorktreePathForBranch(
+      ctx.repo.worktrees,
+      branch,
+      ctx.repo.mainWorktree,
+    );
+    if (existingWorktreePath !== null) {
+      printDestination(ctx.console, existingWorktreePath);
+      return 0;
+    }
+  }
+
   return createPrWorktreeAction(ctx, prNumber, target);
 }
 
