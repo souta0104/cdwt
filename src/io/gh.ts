@@ -10,6 +10,8 @@ interface GhPrItem {
   number: number;
   title: string;
   headRefName: string;
+  author: { login: string };
+  assignees: { login: string }[];
 }
 
 /**
@@ -20,7 +22,14 @@ interface GhPrItem {
 export async function listPullRequests(cwd: string, limit = 100): Promise<PullRequest[]> {
   const result = await run(
     "gh",
-    ["pr", "list", "--limit", String(limit), "--json", "number,title,headRefName"],
+    [
+      "pr",
+      "list",
+      "--limit",
+      String(limit),
+      "--json",
+      "number,title,headRefName,author,assignees",
+    ],
     { cwd },
   );
   if (result.exitCode !== 0) return [];
@@ -34,7 +43,13 @@ export async function listPullRequests(cwd: string, limit = 100): Promise<PullRe
   const out: PullRequest[] = [];
   for (const item of parsed) {
     if (!isGhPrItem(item)) continue;
-    out.push({ number: item.number, branch: item.headRefName, title: item.title });
+    out.push({
+      number: item.number,
+      branch: item.headRefName,
+      title: item.title,
+      author: item.author.login,
+      assignees: item.assignees.map((a) => a.login),
+    });
   }
   return out;
 }
@@ -50,9 +65,22 @@ export async function checkoutPr(cwd: string, prNumber: number): Promise<boolean
 function isGhPrItem(value: unknown): value is GhPrItem {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
+  if (
+    typeof v["number"] !== "number" ||
+    typeof v["title"] !== "string" ||
+    typeof v["headRefName"] !== "string"
+  ) {
+    return false;
+  }
+  if (!hasLogin(v["author"])) return false;
+  const assignees = v["assignees"];
+  return Array.isArray(assignees) && assignees.every(hasLogin);
+}
+
+function hasLogin(value: unknown): value is { login: string } {
   return (
-    typeof v["number"] === "number" &&
-    typeof v["title"] === "string" &&
-    typeof v["headRefName"] === "string"
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)["login"] === "string"
   );
 }

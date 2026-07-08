@@ -15,6 +15,8 @@ export interface PullRequest {
   number: number;
   branch: string;
   title: string;
+  author: string;
+  assignees: string[];
 }
 
 export interface CopyIgnoredConfig {

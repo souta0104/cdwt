@@ -93,7 +93,7 @@ export function buildSections({
       line({
         kind: "pr",
         section: "pr",
-        name: `#${pr.number} ${pr.title}`,
+        name: `#${pr.number} ${pr.title} ${formatPrMeta(pr)}`,
         shortPath: displayPath({
           path: targetPath,
           mainWorktree: repo.mainWorktree,
@@ -163,6 +163,13 @@ function line(input: BuildLineInput): DisplayLine {
     branch: input.branch,
     prNumber: input.prNumber ?? null,
   };
+}
+
+/** Formats a PR's author/assignees as `(@author)` or `(@author→@a,@b)`. */
+function formatPrMeta(pr: PullRequest): string {
+  if (pr.assignees.length === 0) return `(@${pr.author})`;
+  const assignees = pr.assignees.map((a) => `@${a}`).join(",");
+  return `(@${pr.author}→${assignees})`;
 }
 
 function worktreeLabel(wt: Worktree, currentPath: string): string {

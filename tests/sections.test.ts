@@ -28,7 +28,9 @@ describe("buildSections", () => {
   it("emits sections in order: main → wt → pr → br", () => {
     const lines = buildSections({
       repo: makeRepo(),
-      prs: [{ number: 7, branch: "pr-branch", title: "Add cool thing" }],
+      prs: [
+        { number: 7, branch: "pr-branch", title: "Add cool thing", author: "alice", assignees: [] },
+      ],
       localBranches: ["main", "feature", "draft"],
       home: HOME,
     });
@@ -95,7 +97,7 @@ describe("buildSections", () => {
   it("excludes a local branch when it appears as the head of an open PR", () => {
     const lines = buildSections({
       repo: makeRepo(),
-      prs: [{ number: 9, branch: "pr-only", title: "x" }],
+      prs: [{ number: 9, branch: "pr-only", title: "x", author: "alice", assignees: [] }],
       localBranches: ["pr-only", "draft"],
       home: HOME,
     });
@@ -106,7 +108,7 @@ describe("buildSections", () => {
   it("points a PR entry at the existing worktree path when its branch is checked out", () => {
     const lines = buildSections({
       repo: makeRepo(),
-      prs: [{ number: 1, branch: "feature", title: "x" }],
+      prs: [{ number: 1, branch: "feature", title: "x", author: "alice", assignees: [] }],
       localBranches: [],
       home: HOME,
     });
@@ -117,7 +119,7 @@ describe("buildSections", () => {
   it("points a PR entry at a new pr-N path when no worktree exists for it", () => {
     const lines = buildSections({
       repo: makeRepo(),
-      prs: [{ number: 42, branch: "from-fork", title: "x" }],
+      prs: [{ number: 42, branch: "from-fork", title: "x", author: "alice", assignees: [] }],
       localBranches: [],
       home: HOME,
     });
@@ -139,7 +141,9 @@ describe("buildSections", () => {
   it("points a PR entry whose head IS the main branch at a fresh pr-N path, not the main worktree", () => {
     const lines = buildSections({
       repo: makeRepo(),
-      prs: [{ number: 99, branch: "main", title: "release prep" }],
+      prs: [
+        { number: 99, branch: "main", title: "release prep", author: "alice", assignees: [] },
+      ],
       localBranches: [],
       home: HOME,
     });
@@ -151,7 +155,7 @@ describe("buildSections", () => {
   it("counts entries per section", () => {
     const lines = buildSections({
       repo: makeRepo(),
-      prs: [{ number: 7, branch: "pr-only", title: "t" }],
+      prs: [{ number: 7, branch: "pr-only", title: "t", author: "alice", assignees: [] }],
       localBranches: ["draft"],
       home: HOME,
     });
@@ -160,6 +164,57 @@ describe("buildSections", () => {
     expect(counts.get("wt")).toBe(2);
     expect(counts.get("pr")).toBe(1);
     expect(counts.get("br")).toBe(1);
+  });
+
+  it("appends the author to a PR name when it has no assignees", () => {
+    const lines = buildSections({
+      repo: makeRepo(),
+      prs: [
+        { number: 5, branch: "pr-branch", title: "Add cool thing", author: "alice", assignees: [] },
+      ],
+      localBranches: [],
+      home: HOME,
+    });
+    const pr = lines.find((l) => l.section === "pr");
+    expect(pr?.name).toBe("#5 Add cool thing (@alice)");
+  });
+
+  it("appends author and a single assignee to a PR name with an arrow", () => {
+    const lines = buildSections({
+      repo: makeRepo(),
+      prs: [
+        {
+          number: 5,
+          branch: "pr-branch",
+          title: "Add cool thing",
+          author: "alice",
+          assignees: ["bob"],
+        },
+      ],
+      localBranches: [],
+      home: HOME,
+    });
+    const pr = lines.find((l) => l.section === "pr");
+    expect(pr?.name).toBe("#5 Add cool thing (@alice→@bob)");
+  });
+
+  it("joins multiple assignees with commas in a PR name", () => {
+    const lines = buildSections({
+      repo: makeRepo(),
+      prs: [
+        {
+          number: 5,
+          branch: "pr-branch",
+          title: "Add cool thing",
+          author: "alice",
+          assignees: ["bob", "carol"],
+        },
+      ],
+      localBranches: [],
+      home: HOME,
+    });
+    const pr = lines.find((l) => l.section === "pr");
+    expect(pr?.name).toBe("#5 Add cool thing (@alice→@bob,@carol)");
   });
 });
 

@@ -79,6 +79,10 @@ Filled glyphs (`★ ●`) mark rows whose worktree already exists on disk; open
 glyphs (`○ ◆`) mark rows that will create a new worktree on `enter`. Each
 section also has its own color so worktrees and branches are visually distinct.
 
+`[PR]` rows show the author and assignees after the title, e.g.
+`#123 Add cool thing (@alice→@bob,@carol)`; PRs without an assignee show only
+`(@alice)`.
+
 `/new <branch>` creates a new worktree from the default branch; `ctrl-d` on
 a `[worktree]` row deletes that worktree (with a confirmation prompt).
 
