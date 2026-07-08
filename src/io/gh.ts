@@ -62,6 +62,27 @@ export async function checkoutPr(cwd: string, prNumber: number): Promise<boolean
   return result.exitCode === 0;
 }
 
+/**
+ * Resolve a PR number to its head branch name via `gh pr view`. Returns
+ * `null` on any failure (gh missing, non-zero exit, malformed JSON) so
+ * callers can fall back to their own handling.
+ */
+export async function getPrHeadBranch(cwd: string, prNumber: number): Promise<string | null> {
+  const result = await run("gh", ["pr", "view", String(prNumber), "--json", "headRefName"], {
+    cwd,
+  }).catch(() => null);
+  if (result === null || result.exitCode !== 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const headRefName = (parsed as Record<string, unknown>)["headRefName"];
+  return typeof headRefName === "string" ? headRefName : null;
+}
+
 function isGhPrItem(value: unknown): value is GhPrItem {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;

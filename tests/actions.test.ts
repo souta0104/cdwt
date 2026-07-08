@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -252,6 +252,38 @@ describe("goToPrWorktreeAction", () => {
     expect(console.stdout.trim()).toBe(target);
     expect(console.askedPrompts).toEqual([]);
   });
+
+  it("redirects to the branch's existing worktree instead of creating repo-pr-<n>", async () => {
+    const target = path.join(workdir, "repo-feature-x");
+    exec(repoDir, "git", ["worktree", "add", "-b", "feature-x", target]);
+    const { ctx, console } = await makeContext();
+    const prPath = makePrPath(99, ctx.repo.mainWorktree, ctx.repo.repoName);
+
+    await withFakeGh(
+      {
+        CDWT_TEST_GH_VIEW_JSON: JSON.stringify({ headRefName: "feature-x" }),
+        CDWT_TEST_GH_CHECKOUT_EXIT: "1",
+      },
+      async () => {
+        const code = await goToPrWorktreeAction(ctx, 99);
+        expect(code).toBe(0);
+        expect(console.stdout.trim()).toBe(target);
+      },
+    );
+    await expect(stat(prPath)).rejects.toThrow();
+  });
+
+  it("falls back to the create flow when gh can't resolve the PR's head branch", async () => {
+    const { ctx, console } = await makeContext();
+    const prPath = makePrPath(123, ctx.repo.mainWorktree, ctx.repo.repoName);
+
+    await withFakeGh({ CDWT_TEST_GH_VIEW_EXIT: "1", CDWT_TEST_GH_CHECKOUT_EXIT: "0" }, async () => {
+      const code = await goToPrWorktreeAction(ctx, 123);
+      expect(code).toBe(0);
+      expect(console.stdout.trim()).toBe(prPath);
+    });
+    expect((await stat(prPath)).isDirectory()).toBe(true);
+  });
 });
 
 function exec(cwd: string, command: string, args: string[]): void {
@@ -277,5 +309,42 @@ function restoreEnv(name: string, previous: string | undefined): void {
     delete process.env[name];
   } else {
     process.env[name] = previous;
+  }
+}
+
+const FAKE_GH_SCRIPT = `#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  exit_code="\${CDWT_TEST_GH_VIEW_EXIT:-0}"
+  [ "$exit_code" != "0" ] && exit "$exit_code"
+  printf '%s' "\${CDWT_TEST_GH_VIEW_JSON:-null}"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
+  exit "\${CDWT_TEST_GH_CHECKOUT_EXIT:-0}"
+fi
+exit 1
+`;
+
+/**
+ * Puts a fake `gh` executable on PATH for the duration of `fn`, driven by the
+ * given env vars (see FAKE_GH_SCRIPT), then restores PATH and those vars.
+ */
+async function withFakeGh(env: Record<string, string>, fn: () => Promise<void>): Promise<void> {
+  const binDir = path.join(workdir, "fake-bin");
+  await mkdir(binDir, { recursive: true });
+  const ghPath = path.join(binDir, "gh");
+  await writeFile(ghPath, FAKE_GH_SCRIPT);
+  await chmod(ghPath, 0o755);
+
+  const previousPath = process.env["PATH"];
+  const previousEnv = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+  process.env["PATH"] = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+  for (const [k, v] of Object.entries(env)) process.env[k] = v;
+
+  try {
+    await fn();
+  } finally {
+    restoreEnv("PATH", previousPath);
+    for (const [k, v] of Object.entries(previousEnv)) restoreEnv(k, v);
   }
 }
